@@ -1,0 +1,9 @@
+# Markets to always include regardless of other filters
+include_slugs: []
+
+# Markets to always exclude
+exclude_slugs: []
+
+# Tag-based filtering
+include_tags: []
+exclude_tags: []

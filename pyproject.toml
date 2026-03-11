@@ -1,0 +1,41 @@
+[project]
+name = "polymarket-bot"
+version = "0.1.0"
+description = "Bayesian trading bot for Polymarket using LMSR analysis and Half-Kelly sizing"
+requires-python = ">=3.9"
+dependencies = [
+    "py-clob-client>=0.34",
+    "aiohttp>=3.9",
+    "websockets>=12.0",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "pyyaml>=6.0",
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "slack-sdk>=3.27",
+    "python-json-logger>=2.0",
+    "aiosqlite>=0.19",
+    "python-dotenv>=1.0",
+    "flask>=3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "pytest-cov>=4.0",
+    "aioresponses>=0.7",
+    "ruff>=0.3",
+]
+
+[build-system]
+requires = ["setuptools>=64.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100

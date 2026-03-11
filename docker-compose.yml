@@ -1,0 +1,21 @@
+version: "3.8"
+
+services:
+  polymarket-bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "5050:5050"
+    volumes:
+      - bot-data:/app/data
+      - bot-logs:/app/logs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5050/')"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  bot-data:
+  bot-logs:

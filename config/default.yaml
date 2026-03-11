@@ -1,0 +1,75 @@
+trading:
+  kelly_fraction: 0.5
+  min_edge_threshold: 0.05
+  max_position_usd: 10.0
+  total_bankroll_usd: 80.0
+  max_portfolio_exposure: 0.5
+  min_liquidity_usd: 500.0
+  order_type: "GTC"
+  price_tolerance: 0.005
+  stale_order_timeout_seconds: 300
+  daily_loss_limit_usd: 20.0
+  dry_run: true
+
+lmsr:
+  default_b: 100.0
+  b_estimation_method: "order_book_fit"
+  min_b: 10.0
+  max_b: 10000.0
+
+bayesian:
+  default_prior: 0.5
+  prior_strength: 3.0
+  signal_decay_hours: 24.0
+  min_signals_to_trade: 3
+
+signals:
+  orderbook_imbalance:
+    enabled: true
+    sensitivity: 1.0
+    min_depth_usd: 100.0
+  lmsr_deviation:
+    enabled: true
+    min_deviation: 0.01
+  volume:
+    enabled: true
+    lookback_trades: 50
+  cross_market:
+    enabled: true
+    min_inconsistency: 0.05
+    max_event_markets: 20
+  whale_tracker:
+    enabled: true
+    whale_threshold_usd: 500.0
+    volume_spike_multiplier: 3.0
+    lookback_trades: 100
+    min_whale_trades: 1
+  related_market:
+    enabled: true
+    min_similarity: 0.3
+    max_related: 5
+    min_price_divergence: 0.10
+
+scanner:
+  rescan_interval_seconds: 300
+  min_volume_24h_usd: 100.0
+  min_liquidity_usd: 500.0
+  min_hours_to_expiry: 24.0
+
+feed:
+  ws_reconnect_max_delay: 60
+  rest_poll_interval_seconds: 30
+  heartbeat_interval_seconds: 10
+
+notifications:
+  notify_on_trade: true
+  notify_on_error: true
+  notify_on_startup: true
+  daily_summary_hour_utc: 0
+
+logging:
+  level: "INFO"
+  format: "json"
+  file: "logs/bot.log"
+  max_bytes: 10485760
+  backup_count: 5
