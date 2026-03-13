@@ -108,6 +108,59 @@ def startup_blocks(market_count: int, bankroll: float, dry_run: bool) -> list[di
     ]
 
 
+def exit_blocks(
+    market_question: str,
+    reason: str,
+    entry_price: float,
+    exit_price: float,
+    size_shares: float,
+    pnl_pct: float,
+    realized_pnl: float,
+    edge_at_exit: float,
+    confidence: float,
+    market_slug: str,
+    dry_run: bool = False,
+) -> list[dict]:
+    prefix = "[DRY RUN] " if dry_run else ""
+    pnl_emoji = ":white_check_mark:" if realized_pnl >= 0 else ":x:"
+    reason_display = reason.replace("_", " ").title()
+
+    return [
+        {
+            "type": "header",
+            "text": {"type": "plain_text", "text": f"{prefix}Position Closed"},
+        },
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"{pnl_emoji} *{market_question}*"},
+        },
+        {
+            "type": "section",
+            "fields": [
+                {"type": "mrkdwn", "text": f"*Reason:*\n{reason_display}"},
+                {"type": "mrkdwn", "text": f"*Entry:*\n${entry_price:.4f}"},
+                {"type": "mrkdwn", "text": f"*Exit:*\n${exit_price:.4f}"},
+                {"type": "mrkdwn", "text": f"*Shares:*\n{size_shares:.2f}"},
+                {"type": "mrkdwn", "text": f"*PnL:*\n{pnl_pct:.1%} (${realized_pnl:.2f})"},
+                {"type": "mrkdwn", "text": f"*Edge@Exit:*\n{edge_at_exit:.4f}"},
+            ],
+        },
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": (
+                        f"Confidence: {confidence:.2f} | "
+                        f"<https://polymarket.com/event/{market_slug}|View Market>"
+                    ),
+                },
+            ],
+        },
+        {"type": "divider"},
+    ]
+
+
 def daily_summary_blocks(
     positions_count: int,
     total_deployed: float,

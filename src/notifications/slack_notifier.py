@@ -13,6 +13,7 @@ from src.market.models import Market
 from src.notifications.formatters import (
     daily_summary_blocks,
     error_blocks,
+    exit_blocks,
     startup_blocks,
     trade_blocks,
 )
@@ -56,6 +57,38 @@ class SlackNotifier:
             dry_run=self._dry_run,
         )
         await self._send(blocks, f"Trade: {sizing.side} {market.question[:50]}")
+
+    async def notify_exit(
+        self,
+        market_question: str,
+        reason: str,
+        entry_price: float,
+        exit_price: float,
+        size_shares: float,
+        pnl_pct: float,
+        realized_pnl: float,
+        edge_at_exit: float,
+        confidence: float,
+        market_slug: str,
+    ) -> None:
+        """Notify on ALL exits (not filtered to YES-only like entries)."""
+        if not self._config.notify_on_trade or not self._webhook:
+            return
+
+        blocks = exit_blocks(
+            market_question=market_question,
+            reason=reason,
+            entry_price=entry_price,
+            exit_price=exit_price,
+            size_shares=size_shares,
+            pnl_pct=pnl_pct,
+            realized_pnl=realized_pnl,
+            edge_at_exit=edge_at_exit,
+            confidence=confidence,
+            market_slug=market_slug,
+            dry_run=self._dry_run,
+        )
+        await self._send(blocks, f"Exit: {reason} {market_question[:50]}")
 
     async def notify_error(self, error: Exception, context: str) -> None:
         if not self._config.notify_on_error or not self._webhook:

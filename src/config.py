@@ -109,6 +109,22 @@ class SignalConfig(BaseSettings):
     model_config = {"extra": "ignore"}
 
 
+class ExitConfig(BaseSettings):
+    enabled: bool = True
+    edge_floor_threshold: float = -0.05
+    edge_floor_confidence_min: float = 0.60
+    edge_convergence_threshold: float = 0.03
+    edge_convergence_min_hold_s: float = 300.0
+    min_exit_liquidity_pct: float = 0.80
+    min_acceptable_bid_pct: float = 0.95
+    max_hold_hours: float = 72.0
+    emergency_floor_pct: float = 0.25
+    exit_cooldown_seconds: float = 60.0
+    check_interval_seconds: float = 30.0
+
+    model_config = {"extra": "ignore"}
+
+
 class ScannerConfig(BaseSettings):
     rescan_interval_seconds: int = 300
     min_volume_24h_usd: float = 100.0
@@ -163,6 +179,7 @@ class BotConfig:
         lmsr: LMSRConfig,
         bayesian: BayesianConfig,
         signals: SignalConfig,
+        exit: ExitConfig,
         scanner: ScannerConfig,
         feed: FeedConfig,
         slack: SlackConfig,
@@ -174,6 +191,7 @@ class BotConfig:
         self.lmsr = lmsr
         self.bayesian = bayesian
         self.signals = signals
+        self.exit = exit
         self.scanner = scanner
         self.feed = feed
         self.slack = slack
@@ -196,6 +214,7 @@ def load_config(env: Optional[str] = None) -> BotConfig:
         lmsr=LMSRConfig(**merged.get("lmsr", {})),
         bayesian=BayesianConfig(**merged.get("bayesian", {})),
         signals=SignalConfig(**merged.get("signals", {})),
+        exit=ExitConfig(**merged.get("exit", {})),
         scanner=ScannerConfig(**merged.get("scanner", {})),
         feed=FeedConfig(**merged.get("feed", {})),
         slack=SlackConfig(),

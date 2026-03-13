@@ -15,6 +15,7 @@ from src.analysis.bayesian_engine import BayesianEngine
 from src.analysis.lmsr_engine import LMSREngine
 from src.analysis.signal_registry import SignalRegistry
 from src.config import BotConfig, load_config
+from src.execution.exit_manager import ExitManager
 from src.execution.order_manager import OrderManager, TradeRequest
 from src.execution.position_tracker import PositionTracker
 from src.feed.order_book import OrderBookState
@@ -50,6 +51,9 @@ class TradingBot:
         self.slack = SlackNotifier(config.slack, config.trading)
         self.state_store = StateStore()
         self.trade_log = TradeLog()
+        self.exit_mgr = ExitManager(
+            config.exit, self.order_mgr, self.positions, self.state_store, self.slack,
+        )
 
         self.signal_registry = SignalRegistry()
         sig_cfg = config.signals
@@ -114,6 +118,13 @@ class TradingBot:
     async def initialize(self) -> None:
         await self.state_store.initialize()
 
+        # Restore positions from SQLite (crash recovery)
+        persisted = await self.state_store.load_all_positions()
+        for pos in persisted:
+            self.positions.restore_position(pos)
+        if persisted:
+            logger.info("Restored %d positions from database", len(persisted))
+
         if self.config.polymarket.private_key:
             await self.order_mgr.initialize()
         else:
@@ -159,6 +170,7 @@ class TradingBot:
                 self._update_event_count.get(condition_id, 0) + 1
             )
             await self._analyze_and_maybe_trade(condition_id)
+            await self._check_exits_for_market(condition_id)
 
     async def _on_price_change(self, msg: dict) -> None:
         asset_id = msg.get("asset_id", msg.get("market", ""))
@@ -179,6 +191,7 @@ class TradingBot:
                 self._update_event_count.get(condition_id, 0) + 1
             )
             await self._analyze_and_maybe_trade(condition_id)
+            await self._check_exits_for_market(condition_id)
 
     async def _on_trade(self, msg: dict) -> None:
         asset_id = msg.get("asset_id", msg.get("market", ""))
@@ -303,13 +316,14 @@ class TradingBot:
 
             # 8. Track position
             if order.status not in ("failed",):
-                self.positions.update_from_fill(
+                pos = self.positions.update_from_fill(
                     condition_id=condition_id,
                     token_id=token_id,
                     side="YES" if "YES" in sizing.side else "NO",
                     fill_size=sizing.position_size_shares,
                     fill_price=order.price,
                 )
+                await self.state_store.save_position(pos)
 
             # 9. Notify
             await self.slack.notify_trade(sizing, order, market)
@@ -347,6 +361,145 @@ class TradingBot:
                 status=order.status,
                 dry_run=self.config.trading.dry_run,
             )
+
+    # ---- Exit management ----
+
+    async def _check_exits_for_market(self, condition_id: str) -> None:
+        """Check if any positions in this market should be exited."""
+        if not self.config.exit.enabled:
+            return
+
+        market = self.scanner.get_market(condition_id)
+        if market is None:
+            return
+
+        for token in market.tokens:
+            pos = self.positions.get_position(token.token_id)
+            if pos is None or pos.size <= 0:
+                continue
+
+            book = self._books.get(token.token_id)
+            if book is None or not book.has_data:
+                continue
+
+            # Update high-water mark on every tick
+            if book.best_bid is not None:
+                pos.update_high_water_mark(book.best_bid)
+
+            p_hat = self.bayesian.get_estimate(condition_id)
+            if p_hat is None:
+                continue
+
+            # For NO positions, pass (1 - p_hat) as the NO probability
+            pos_p_hat = p_hat if pos.side == "YES" else (1 - p_hat)
+
+            # Get LMSR confidence
+            yes_book = self._books.get(market.yes_token_id)
+            confidence = 0.5
+            if yes_book and yes_book.has_data and yes_book.mid_price is not None:
+                lmsr_state = self.lmsr.compute_state(
+                    yes_book.bids_as_tuples(), yes_book.asks_as_tuples(), yes_book.mid_price
+                )
+                confidence = lmsr_state.confidence
+
+            signal = self.exit_mgr.evaluate_position(
+                pos, book, pos_p_hat, confidence, market
+            )
+            if signal is None:
+                continue
+
+            executed = self.exit_mgr.execute_exit(
+                signal, market, dry_run=self.config.trading.dry_run
+            )
+            if executed:
+                pnl = (signal.current_price - pos.avg_price) * signal.size_to_sell
+                self.risk_mgr.record_pnl(pnl)
+                await self._log_exit(signal, market, p_hat)
+
+    async def _log_exit(self, signal, market, p_hat: float) -> None:
+        """Log an exit to Slack, SQLite, and CSV."""
+        realized_pnl = signal.pnl_pct * signal.entry_price * signal.size_to_sell
+
+        # Slack
+        await self.slack.notify_exit(
+            market_question=market.question if market else "Unknown",
+            reason=signal.reason.value,
+            entry_price=signal.entry_price,
+            exit_price=signal.current_price,
+            size_shares=signal.size_to_sell,
+            pnl_pct=signal.pnl_pct,
+            realized_pnl=realized_pnl,
+            edge_at_exit=signal.edge_at_exit,
+            confidence=signal.confidence,
+            market_slug=market.event_slug or market.slug if market else "",
+        )
+
+        # SQLite
+        import uuid
+        exit_order_id = f"exit_{uuid.uuid4().hex[:12]}"
+        await self.state_store.log_trade(
+            order_id=exit_order_id,
+            condition_id=signal.condition_id,
+            token_id=signal.token_id,
+            side=f"SELL_{signal.reason.value.upper()}",
+            price=signal.current_price,
+            size=signal.size_to_sell,
+            status="dry_run" if self.config.trading.dry_run else "filled",
+            edge=signal.edge_at_exit,
+            kelly_fraction=0.0,
+            p_hat=p_hat or 0.0,
+            b_estimate=0.0,
+            placed_at=time.time(),
+        )
+
+        # CSV
+        self.trade_log.log(
+            order_id=exit_order_id,
+            condition_id=signal.condition_id,
+            market_question=market.question if market else "Unknown",
+            side=f"SELL_{signal.reason.value.upper()}",
+            price=signal.current_price,
+            size_shares=signal.size_to_sell,
+            size_usd=signal.size_to_sell * signal.current_price,
+            edge=signal.edge_at_exit,
+            kelly_fraction=0.0,
+            p_hat=p_hat or 0.0,
+            market_price=signal.current_price,
+            b_estimate=0.0,
+            confidence=signal.confidence,
+            status="dry_run" if self.config.trading.dry_run else "filled",
+            dry_run=self.config.trading.dry_run,
+        )
+
+        # Delete position from persistence if fully closed
+        remaining = self.positions.get_position(signal.token_id)
+        if remaining is None:
+            await self.state_store.delete_position(signal.token_id)
+
+    async def _periodic_exit_sweep(self) -> None:
+        """Periodic sweep for time-based exits and position monitoring."""
+        interval = self.config.exit.check_interval_seconds
+        while not self._shutdown_event.is_set():
+            await asyncio.sleep(interval)
+            if not self.config.exit.enabled:
+                continue
+            try:
+                signals = self.exit_mgr.check_all_positions(
+                    books=self._books, bayesian=self.bayesian, scanner=self.scanner,
+                )
+                for signal in signals:
+                    market = self.scanner.get_market(signal.condition_id)
+                    pos = self.positions.get_position(signal.token_id)
+                    executed = self.exit_mgr.execute_exit(
+                        signal, market, dry_run=self.config.trading.dry_run
+                    )
+                    if executed:
+                        pnl = (signal.current_price - signal.entry_price) * signal.size_to_sell
+                        self.risk_mgr.record_pnl(pnl)
+                        p_hat = self.bayesian.get_estimate(signal.condition_id)
+                        await self._log_exit(signal, market, p_hat or 0.0)
+            except Exception:
+                logger.exception("Exit sweep failed")
 
     # ---- Periodic tasks ----
 
@@ -430,6 +583,7 @@ class TradingBot:
             asyncio.create_task(self._periodic_order_cleanup(), name="cleanup"),
             asyncio.create_task(self._periodic_signal_decay(), name="decay"),
             asyncio.create_task(self._periodic_daily_summary(), name="daily"),
+            asyncio.create_task(self._periodic_exit_sweep(), name="exit_sweep"),
         ]
 
         logger.info("Bot running — %d markets, waiting for data...", len(self.scanner.markets))
