@@ -41,6 +41,9 @@ class LMSREngine:
         self.default_b = config.default_b
         self.min_b = config.min_b
         self.max_b = config.max_b
+        self.use_fit_residual = getattr(config, "use_fit_residual_confidence", True)
+        self.fit_residual_weight = getattr(config, "fit_residual_weight", 1.0)
+        self.max_b_bound_penalty = getattr(config, "max_b_bound_penalty", 0.10)
 
     # ---- Core LMSR functions (numerically stable) ----
 
@@ -73,15 +76,17 @@ class LMSREngine:
         bids: list[tuple[float, float]],
         asks: list[tuple[float, float]],
         current_price_yes: float,
-    ) -> float:
+    ) -> tuple[float, float]:
         """
         Estimate LMSR liquidity parameter b from order book depth.
 
         Walks the ask side to build an empirical price-impact curve, then
         finds the b that minimizes squared error vs. the LMSR theoretical curve.
+
+        Returns (b, r_squared) where r_squared measures curve-fit quality.
         """
         if not asks or len(asks) < 2:
-            return self.default_b
+            return self.default_b, 0.0
 
         p = clamp(current_price_yes, 0.01, 0.99)
 
@@ -94,7 +99,7 @@ class LMSREngine:
             empirical.append((cumulative, price))
 
         if len(empirical) < 2:
-            return self.default_b
+            return self.default_b, 0.0
 
         def objective(b_cand: float) -> float:
             if b_cand <= 0:
@@ -109,7 +114,25 @@ class LMSREngine:
 
         result = minimize_scalar(objective, bounds=(self.min_b, self.max_b), method="bounded")
         estimated = result.x if result.success else self.default_b
-        return float(clamp(estimated, self.min_b, self.max_b))
+        b = float(clamp(estimated, self.min_b, self.max_b))
+
+        # Compute R² (coefficient of determination) for fit quality
+        emp_prices = np.array([ep for _, ep in empirical])
+        mean_price = float(np.mean(emp_prices))
+        ss_tot = float(np.sum((emp_prices - mean_price) ** 2))
+
+        if ss_tot > 0:
+            q_yes_init = b * np.log(p / (1 - p))
+            ss_res = 0.0
+            for delta, emp_price in empirical:
+                q_after = np.array([q_yes_init + delta, 0.0])
+                theo_price = float(softmax(q_after / b)[0])
+                ss_res += (theo_price - emp_price) ** 2
+            r_squared = max(0.0, 1.0 - ss_res / ss_tot)
+        else:
+            r_squared = 0.0
+
+        return b, r_squared
 
     def compute_state(
         self,
@@ -118,7 +141,7 @@ class LMSREngine:
         mid_price_yes: float,
     ) -> LMSRState:
         """Compute full LMSR state for a binary market."""
-        b = self.estimate_b_from_orderbook(bids, asks, mid_price_yes)
+        b, r_squared = self.estimate_b_from_orderbook(bids, asks, mid_price_yes)
 
         p = clamp(mid_price_yes, 0.01, 0.99)
         q_yes = b * np.log(p / (1 - p))
@@ -126,13 +149,19 @@ class LMSREngine:
 
         prices = self.price(np.array([q_yes, q_no]), b)
 
-        # Confidence scales with order book depth
-        total_depth = sum(s for _, s in bids) + sum(s for _, s in asks)
-        confidence = clamp(total_depth / 1000.0, 0.0, 1.0)
+        if self.use_fit_residual:
+            # R²-based confidence: measures how well the LMSR model fits the
+            # observed order book. total_depth/1000 measured capital, not
+            # information — R² measures actual price-impact curve fit quality.
+            confidence = clamp(r_squared * self.fit_residual_weight, 0.0, 1.0)
+        else:
+            # Legacy: depth-based confidence
+            total_depth = sum(s for _, s in bids) + sum(s for _, s in asks)
+            confidence = clamp(total_depth / 1000.0, 0.0, 1.0)
 
         # If b hit the max bound, the fit is unreliable — reduce confidence
         if b >= self.max_b * 0.99:
-            confidence = min(confidence, 0.1)
+            confidence = min(confidence, self.max_b_bound_penalty)
 
         return LMSRState(
             b=b,

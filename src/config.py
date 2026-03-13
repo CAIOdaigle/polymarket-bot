@@ -62,15 +62,64 @@ class LMSRConfig(BaseSettings):
     b_estimation_method: str = "order_book_fit"
     min_b: float = 10.0
     max_b: float = 10000.0
+    use_fit_residual_confidence: bool = True
+    fit_residual_weight: float = 1.0
+    max_b_bound_penalty: float = 0.10
 
     model_config = {"extra": "ignore"}
 
 
 class BayesianConfig(BaseSettings):
+    # New panel-reviewed fields
+    prior_yes: float = 0.50
+    posterior_clamp_low: float = 0.05
+    posterior_clamp_high: float = 0.95
+    min_signals_to_trade: int = 2
+    decay_interval_seconds: float = 300.0
+    time_decay_alpha: float = 0.85
+    min_signal_confidence: float = 0.20
+    intra_group_decay: float = 0.15
+
+    # Legacy fields (kept for backward compat)
     default_prior: float = 0.5
     prior_strength: float = 1.0
     signal_decay_hours: float = 24.0
-    min_signals_to_trade: int = 1
+
+    model_config = {"extra": "ignore"}
+
+
+class KellyConfig(BaseSettings):
+    # Confidence gate — binary, not continuous multiplier
+    min_confidence: float = 0.40
+
+    # Kelly fractions by time horizon
+    kelly_short_dated: float = 0.25    # < 24h to resolution
+    kelly_medium_dated: float = 0.33   # 24h – 72h
+    kelly_long_dated: float = 0.50     # > 72h
+
+    short_dated_hours: float = 24.0
+    medium_dated_hours: float = 72.0
+
+    # Edge thresholds — raw edge only
+    min_edge_threshold: float = 0.05
+    min_edge_after_spread: float = 0.03
+
+    # Position limits
+    max_position_usd: float = 10.0
+    total_bankroll_usd: float = 80.0
+    max_portfolio_exposure: float = 0.50
+
+    # Order type
+    order_type: str = "GTC"
+
+    model_config = {"extra": "ignore"}
+
+
+class EntryLiquidityConfig(BaseSettings):
+    min_fill_coverage: float = 0.80
+    max_slippage_pct: float = 0.05
+    min_absolute_depth: float = 5.0
+    check_exit_viability: bool = True
 
     model_config = {"extra": "ignore"}
 
@@ -178,6 +227,8 @@ class BotConfig:
         trading: TradingConfig,
         lmsr: LMSRConfig,
         bayesian: BayesianConfig,
+        kelly: KellyConfig,
+        entry_liquidity: EntryLiquidityConfig,
         signals: SignalConfig,
         exit: ExitConfig,
         scanner: ScannerConfig,
@@ -190,6 +241,8 @@ class BotConfig:
         self.trading = trading
         self.lmsr = lmsr
         self.bayesian = bayesian
+        self.kelly = kelly
+        self.entry_liquidity = entry_liquidity
         self.signals = signals
         self.exit = exit
         self.scanner = scanner
@@ -213,6 +266,8 @@ def load_config(env: Optional[str] = None) -> BotConfig:
         trading=TradingConfig(**merged.get("trading", {})),
         lmsr=LMSRConfig(**merged.get("lmsr", {})),
         bayesian=BayesianConfig(**merged.get("bayesian", {})),
+        kelly=KellyConfig(**merged.get("kelly", {})),
+        entry_liquidity=EntryLiquidityConfig(**merged.get("entry_liquidity", {})),
         signals=SignalConfig(**merged.get("signals", {})),
         exit=ExitConfig(**merged.get("exit", {})),
         scanner=ScannerConfig(**merged.get("scanner", {})),

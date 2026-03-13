@@ -30,6 +30,7 @@ from src.signals.orderbook_signal import OrderBookImbalanceSignal
 from src.signals.related_market_signal import RelatedMarketSignal
 from src.signals.volume_signal import VolumeSignal
 from src.signals.whale_tracker_signal import WhaleTrackerSignal
+from src.sizing.entry_liquidity_gate import EntryLiquidityGate, EntryLiquidityConfig
 from src.sizing.kelly_sizer import KellySizer
 from src.sizing.risk_manager import RiskManager
 from src.utils.logging_config import setup_logging
@@ -44,7 +45,13 @@ class TradingBot:
         self.feed = MarketFeed(config.feed)
         self.lmsr = LMSREngine(config.lmsr)
         self.bayesian = BayesianEngine(config.bayesian)
-        self.sizer = KellySizer(config.trading)
+        self.sizer = KellySizer(config.kelly)
+        self.entry_gate = EntryLiquidityGate(EntryLiquidityConfig(
+            min_fill_coverage=config.entry_liquidity.min_fill_coverage,
+            max_slippage_pct=config.entry_liquidity.max_slippage_pct,
+            min_absolute_depth=config.entry_liquidity.min_absolute_depth,
+            check_exit_viability=config.entry_liquidity.check_exit_viability,
+        ))
         self.risk_mgr = RiskManager(config.trading)
         self.order_mgr = OrderManager(config.polymarket, config.trading)
         self.positions = PositionTracker()
@@ -247,7 +254,8 @@ class TradingBot:
                 scanner=self.scanner, books=self._books,
             )
 
-            # 3. Bayesian update
+            # 3. Update Bayesian with market price as prior anchor
+            self.bayesian.update_market_price(condition_id, mid)
             for sig in signals:
                 self.bayesian.update(condition_id, sig)
 
@@ -275,7 +283,8 @@ class TradingBot:
             if not can_trade:
                 return
 
-            # 6. Kelly sizing
+            # 6. Kelly sizing (now uses ask prices, not mid)
+            no_book = self._books.get(market.no_token_id)
             current_pos = self.positions.get_position_usd(condition_id)
             sizing = self.sizer.compute(
                 p_hat=p_hat,
@@ -285,24 +294,48 @@ class TradingBot:
                 total_deployed_usd=total_deployed,
                 lmsr_confidence=lmsr_state.confidence,
                 signal_count=len(signals),
+                book_yes=yes_book,
+                book_no=no_book,
+                market=market,
             )
 
             if not sizing.should_trade:
                 return
 
-            # 7. Execute
+            # 7. Entry liquidity gate — check both sides before committing
             token_id = (
                 market.yes_token_id if "YES" in sizing.side else market.no_token_id
             )
+            entry_book = self._books.get(token_id)
+            if entry_book is not None:
+                bid_price = entry_book.best_bid or 0.0
+                ask_price = sizing.ask_price if sizing.ask_price > 0 else mid
+                gate_ok, gate_reason = self.entry_gate.check_both_sides(
+                    book_entry=entry_book,
+                    book_exit=entry_book,  # same token — check bid side for exit
+                    size_usd=sizing.position_size_usd,
+                    ask_price=ask_price,
+                    bid_price=bid_price,
+                )
+                if not gate_ok:
+                    logger.info(
+                        "Entry blocked by liquidity gate: %s — %s",
+                        condition_id[:16], gate_reason,
+                    )
+                    return
+
             side = "BUY" if "BUY" in sizing.side else "SELL"
+
+            # Use ask price (true fill cost) instead of mid for order placement
+            order_price = sizing.ask_price if sizing.ask_price > 0 else mid
 
             request = TradeRequest(
                 condition_id=condition_id,
                 token_id=token_id,
                 side=side,
-                price=mid if side == "BUY" else mid,
+                price=order_price,
                 size=sizing.position_size_shares,
-                order_type=self.config.trading.order_type,
+                order_type=self.config.kelly.order_type,
                 edge=sizing.edge,
                 kelly_fraction=sizing.half_kelly_fraction,
                 neg_risk=market.neg_risk,

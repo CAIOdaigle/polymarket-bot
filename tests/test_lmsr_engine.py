@@ -54,12 +54,14 @@ class TestCoreFunctions:
 
 class TestBEstimation:
     def test_estimate_returns_default_with_empty_book(self, engine):
-        b = engine.estimate_b_from_orderbook([], [], 0.5)
+        b, r_sq = engine.estimate_b_from_orderbook([], [], 0.5)
         assert b == engine.default_b
+        assert r_sq == 0.0
 
     def test_estimate_within_bounds(self, engine, sample_bids, sample_asks):
-        b = engine.estimate_b_from_orderbook(sample_bids, sample_asks, 0.6)
+        b, r_sq = engine.estimate_b_from_orderbook(sample_bids, sample_asks, 0.6)
         assert engine.min_b <= b <= engine.max_b
+        assert 0.0 <= r_sq <= 1.0
 
     def test_compute_state_basic(self, engine, sample_bids, sample_asks):
         state = engine.compute_state(sample_bids, sample_asks, 0.6)

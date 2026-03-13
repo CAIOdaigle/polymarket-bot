@@ -16,12 +16,38 @@ lmsr:
   b_estimation_method: "order_book_fit"
   min_b: 10.0
   max_b: 10000.0
+  use_fit_residual_confidence: true
+  fit_residual_weight: 1.0
+  max_b_bound_penalty: 0.10
 
 bayesian:
-  default_prior: 0.5
-  prior_strength: 3.0
-  signal_decay_hours: 24.0
-  min_signals_to_trade: 3
+  prior_yes: 0.50
+  posterior_clamp_low: 0.05
+  posterior_clamp_high: 0.95
+  min_signals_to_trade: 2
+  decay_interval_seconds: 300.0
+  time_decay_alpha: 0.85
+  min_signal_confidence: 0.20
+  intra_group_decay: 0.15
+
+kelly:
+  min_confidence: 0.40
+  kelly_short_dated: 0.25
+  kelly_medium_dated: 0.33
+  kelly_long_dated: 0.50
+  short_dated_hours: 24.0
+  medium_dated_hours: 72.0
+  min_edge_threshold: 0.05
+  min_edge_after_spread: 0.03
+  max_position_usd: 10.0
+  total_bankroll_usd: 80.0
+  max_portfolio_exposure: 0.50
+
+entry_liquidity:
+  min_fill_coverage: 0.80
+  max_slippage_pct: 0.05
+  min_absolute_depth: 5.0
+  check_exit_viability: true
 
 signals:
   orderbook_imbalance:
