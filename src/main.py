@@ -117,7 +117,7 @@ class TradingBot:
 
         # Per-market trade cooldown (condition_id -> last trade timestamp)
         self._last_trade_time: dict[str, float] = {}
-        self._trade_cooldown_seconds = 60.0
+        self._trade_cooldown_seconds = 300.0  # 5 min — prevent hammering same market
 
         # Track update events per market (condition_id -> count of book updates)
         self._update_event_count: dict[str, int] = {}

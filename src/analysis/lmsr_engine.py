@@ -149,15 +149,26 @@ class LMSREngine:
 
         prices = self.price(np.array([q_yes, q_no]), b)
 
+        total_depth = sum(s for _, s in bids) + sum(s for _, s in asks)
+        depth_confidence = clamp(total_depth / 1000.0, 0.0, 1.0)
+
         if self.use_fit_residual:
-            # R²-based confidence: measures how well the LMSR model fits the
-            # observed order book. total_depth/1000 measured capital, not
-            # information — R² measures actual price-impact curve fit quality.
-            confidence = clamp(r_squared * self.fit_residual_weight, 0.0, 1.0)
+            # Blended confidence: R² measures fit quality, depth measures
+            # liquidity. Pure R² fails on sparse Polymarket books (2-5 levels
+            # → R² ≈ 0.05). Blend gives credit for both fit quality AND having
+            # real liquidity behind the prices.
+            r2_confidence = clamp(r_squared * self.fit_residual_weight, 0.0, 1.0)
+
+            # Weight: R² matters more when book is deep enough to fit
+            n_levels = len(asks)
+            if n_levels >= 5:
+                # Deep book: lean on R²
+                confidence = 0.6 * r2_confidence + 0.4 * depth_confidence
+            else:
+                # Sparse book: lean on depth (R² is unreliable with few points)
+                confidence = 0.3 * r2_confidence + 0.7 * depth_confidence
         else:
-            # Legacy: depth-based confidence
-            total_depth = sum(s for _, s in bids) + sum(s for _, s in asks)
-            confidence = clamp(total_depth / 1000.0, 0.0, 1.0)
+            confidence = depth_confidence
 
         # If b hit the max bound, the fit is unreliable — reduce confidence
         if b >= self.max_b * 0.99:
