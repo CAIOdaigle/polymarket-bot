@@ -196,11 +196,12 @@
             <thead>
                 <tr>
                     <th>Time</th>
+                    <th>Market</th>
                     <th>Side</th>
                     <th>Price</th>
                     <th>Size</th>
                     <th>Edge</th>
-                    <th>P-hat</th>
+                    <th>Confidence</th>
                     <th>Proj. Profit</th>
                     <th>Proj. ROI</th>
                     <th>Status</th>
@@ -210,13 +211,16 @@
                 {% for t in trades %}
                 <tr>
                     <td>{{ t.placed_at_fmt }}</td>
+                    <td title="{{ t.market_question or '' }}" style="max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                        {{ t.market_short or '—' }}
+                    </td>
                     <td class="{% if 'BUY' in (t.side or '') %}side-buy{% else %}side-sell{% endif %}">
                         {{ t.side or '—' }}
                     </td>
                     <td>{{ t.price_fmt }}</td>
                     <td>${{ "%.2f"|format(t.size or 0) }}</td>
                     <td>{{ t.edge_pct }}</td>
-                    <td>{{ "%.3f"|format(t.p_hat or 0) }}</td>
+                    <td>{{ t.conf_fmt }}</td>
                     <td class="green">{{ t.proj_profit_usd }}</td>
                     <td class="green">{{ t.proj_profit_pct }}</td>
                     <td>

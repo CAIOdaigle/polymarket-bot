@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS orders (
     kelly_fraction REAL,
     p_hat REAL,
     b_estimate REAL,
+    confidence REAL,
+    market_question TEXT,
     placed_at REAL NOT NULL,
     updated_at REAL
 );
@@ -68,6 +70,20 @@ class StateStore:
         self._db = await aiosqlite.connect(str(self._path))
         await self._db.executescript(SCHEMA)
         await self._db.commit()
+
+        # Migrate existing DBs: add columns that may not exist yet
+        for col, col_type in [
+            ("confidence", "REAL"),
+            ("market_question", "TEXT"),
+        ]:
+            try:
+                await self._db.execute(
+                    f"ALTER TABLE orders ADD COLUMN {col} {col_type}"
+                )
+                await self._db.commit()
+            except Exception:
+                pass  # Column already exists
+
         logger.info("State store initialized at %s", self._path)
 
     async def log_trade(
@@ -84,14 +100,17 @@ class StateStore:
         p_hat: float,
         b_estimate: float,
         placed_at: float,
+        confidence: float = 0.0,
+        market_question: str = "",
     ) -> None:
         if not self._db:
             return
         await self._db.execute(
             """INSERT OR REPLACE INTO orders
                (order_id, condition_id, token_id, side, price, size,
-                status, edge, kelly_fraction, p_hat, b_estimate, placed_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                status, edge, kelly_fraction, p_hat, b_estimate,
+                confidence, market_question, placed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 order_id,
                 condition_id,
@@ -104,6 +123,8 @@ class StateStore:
                 kelly_fraction,
                 p_hat,
                 b_estimate,
+                confidence,
+                market_question,
                 placed_at,
             ),
         )

@@ -44,7 +44,8 @@ def _get_recent_trades(limit: int = 50) -> list[dict]:
         rows = conn.execute(
             """SELECT order_id, condition_id, token_id, side, price, size,
                       filled_size, status, edge, kelly_fraction, p_hat,
-                      b_estimate, placed_at, updated_at
+                      b_estimate, confidence, market_question,
+                      placed_at, updated_at
                FROM orders ORDER BY placed_at DESC LIMIT ?""",
             (limit,),
         ).fetchall()
@@ -69,6 +70,14 @@ def _get_recent_trades(limit: int = 50) -> list[dict]:
                 t["price_fmt"] = f"${t['price']:.4f}"
             else:
                 t["price_fmt"] = "—"
+
+            # Truncate market question for table display
+            mq = t.get("market_question") or ""
+            t["market_short"] = (mq[:60] + "…") if len(mq) > 60 else (mq or "—")
+
+            # Confidence formatting
+            conf = t.get("confidence")
+            t["conf_fmt"] = f"{conf:.2f}" if conf else "—"
 
             # Projected profit: if correct, payout is $1/share - cost
             price = t.get("price") or 0

@@ -375,6 +375,8 @@ class TradingBot:
                 p_hat=p_hat,
                 b_estimate=lmsr_state.b,
                 placed_at=order.placed_at,
+                confidence=lmsr_state.confidence,
+                market_question=market.question if market else "",
             )
 
             self.trade_log.log(
@@ -483,6 +485,8 @@ class TradingBot:
             p_hat=p_hat or 0.0,
             b_estimate=0.0,
             placed_at=time.time(),
+            confidence=signal.confidence,
+            market_question=market.question if market else "Unknown",
         )
 
         # CSV
