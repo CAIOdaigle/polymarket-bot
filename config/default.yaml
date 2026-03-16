@@ -22,8 +22,8 @@ lmsr:
 
 bayesian:
   prior_yes: 0.50
-  posterior_clamp_low: 0.05
-  posterior_clamp_high: 0.95
+  posterior_clamp_low: 0.20
+  posterior_clamp_high: 0.80
   min_signals_to_trade: 2
   decay_interval_seconds: 300.0
   time_decay_alpha: 0.85

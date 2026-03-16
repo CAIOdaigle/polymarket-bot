@@ -227,6 +227,10 @@ class TradingBot:
             if now - last_trade < self._trade_cooldown_seconds:
                 return
 
+            # Set cooldown immediately to prevent rapid-fire duplicates
+            # (other coroutines waiting on the lock will see this timestamp)
+            self._last_trade_time[condition_id] = now
+
             # Require enough independent update events (not just signal types)
             update_count = self._update_event_count.get(condition_id, 0)
             min_updates = self.bayesian.min_signals
@@ -258,6 +262,9 @@ class TradingBot:
             self.bayesian.update_market_price(condition_id, mid)
             for sig in signals:
                 self.bayesian.update(condition_id, sig)
+
+            # Reset update counter so next analysis requires fresh data
+            self._update_event_count[condition_id] = 0
 
             # 4. Get posterior
             p_hat = self.bayesian.get_estimate(condition_id)
