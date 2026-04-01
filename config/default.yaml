@@ -1,15 +1,15 @@
 trading:
   kelly_fraction: 0.5
   min_edge_threshold: 0.05
-  max_position_usd: 10.0
-  total_bankroll_usd: 80.0
+  max_position_usd: 5.0
+  total_bankroll_usd: 50.0
   max_portfolio_exposure: 0.5
   min_liquidity_usd: 500.0
   order_type: "GTC"
   price_tolerance: 0.005
   stale_order_timeout_seconds: 300
-  daily_loss_limit_usd: 20.0
-  dry_run: true
+  daily_loss_limit_usd: 10.0
+  dry_run: false
 
 lmsr:
   default_b: 100.0
@@ -39,8 +39,8 @@ kelly:
   medium_dated_hours: 72.0
   min_edge_threshold: 0.05
   min_edge_after_spread: 0.03
-  max_position_usd: 10.0
-  total_bankroll_usd: 80.0
+  max_position_usd: 5.0
+  total_bankroll_usd: 50.0
   max_portfolio_exposure: 0.50
 
 entry_liquidity:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import signal
 import time
 
@@ -650,6 +651,20 @@ class TradingBot:
 def main() -> None:
     config = load_config()
     setup_logging(config.logging)
+
+    # Safety check: live trading requires explicit confirmation
+    if not config.trading.dry_run:
+        confirm = os.environ.get("CONFIRM_LIVE_TRADING", "").lower()
+        if confirm != "true":
+            logger.critical(
+                "LIVE TRADING is enabled (dry_run=false) but CONFIRM_LIVE_TRADING "
+                "env var is not set to 'true'. Refusing to start. Set "
+                "CONFIRM_LIVE_TRADING=true to confirm you want live orders."
+            )
+            raise SystemExit(1)
+        logger.warning(
+            "*** LIVE TRADING MODE — real orders will be placed ***"
+        )
 
     bot = TradingBot(config)
 
