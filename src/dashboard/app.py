@@ -71,6 +71,21 @@ def _get_recent_trades(limit: int = 50) -> list[dict]:
             else:
                 t["price_fmt"] = "—"
 
+            # Human-readable side display
+            raw_side = (t.get("side") or "").upper()
+            if raw_side == "BUY_YES":
+                t["side_display"] = "YES ▲"
+                t["direction"] = "buy"
+            elif raw_side == "BUY_NO":
+                t["side_display"] = "NO ▼"
+                t["direction"] = "sell"
+            elif raw_side.startswith("SELL"):
+                t["side_display"] = "EXIT"
+                t["direction"] = "exit"
+            else:
+                t["side_display"] = raw_side or "—"
+                t["direction"] = "unknown"
+
             # Truncate market question for table display
             mq = t.get("market_question") or ""
             t["market_short"] = (mq[:60] + "…") if len(mq) > 60 else (mq or "—")
@@ -163,6 +178,8 @@ def dashboard():
     pnl_dates = [d["date"] for d in reversed(daily_pnl)]
     pnl_values = [d["realized_pnl"] for d in reversed(daily_pnl)]
 
+    is_live = not trading.get("dry_run", True)
+
     return render_template(
         "dashboard.html",
         config=trading,
@@ -172,6 +189,7 @@ def dashboard():
         csv_count=csv_count,
         pnl_dates=pnl_dates,
         pnl_values=pnl_values,
+        is_live=is_live,
         now=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
     )
 

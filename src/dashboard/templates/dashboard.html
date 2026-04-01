@@ -89,8 +89,29 @@
         .badge-filled { background: #19272d; color: #58a6ff; }
         .badge-pending { background: #2d2a19; color: #d29922; }
         .badge-cancelled { background: #1c1c1c; color: #8b949e; }
-        .side-buy { color: #3fb950; }
-        .side-sell { color: #f85149; }
+        .side-buy { color: #3fb950; font-weight: 600; }
+        .side-sell { color: #f85149; font-weight: 600; }
+        .side-exit { color: #d29922; font-weight: 600; }
+        .side-unknown { color: #8b949e; }
+        .filter-bar {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        .filter-btn {
+            padding: 6px 14px;
+            border-radius: 6px;
+            border: 1px solid #30363d;
+            background: #161b22;
+            color: #8b949e;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .filter-btn.active {
+            background: #1f6feb;
+            border-color: #1f6feb;
+            color: #fff;
+        }
         .chart-container {
             position: relative;
             height: 250px;
@@ -146,8 +167,8 @@
 
     <div class="cards">
         <div class="card">
-            <div class="label">Total Trades</div>
-            <div class="value blue">{{ stats.total_trades }}</div>
+            <div class="label">{% if is_live %}Live Trades{% else %}Total Trades{% endif %}</div>
+            <div class="value blue">{% if is_live %}{{ stats.live_trades }}{% else %}{{ stats.total_trades }}{% endif %}</div>
             <div class="sub">{{ stats.dry_run_trades }} dry-run / {{ stats.live_trades }} live</div>
         </div>
         <div class="card">
@@ -191,6 +212,10 @@
     <div class="section">
         <h2>Recent Trades (Last 50)</h2>
         {% if trades %}
+        <div class="filter-bar">
+            <button class="filter-btn {% if is_live %}active{% endif %}" onclick="filterTrades('live')" id="btn-live">Live Only</button>
+            <button class="filter-btn {% if not is_live %}active{% endif %}" onclick="filterTrades('all')" id="btn-all">All Trades</button>
+        </div>
         <div style="overflow-x: auto;">
         <table>
             <thead>
@@ -207,15 +232,15 @@
                     <th>Status</th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody id="trade-body">
                 {% for t in trades %}
-                <tr>
+                <tr data-status="{{ t.status or '' }}">
                     <td>{{ t.placed_at_fmt }}</td>
                     <td title="{{ t.market_question or '' }}" style="max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
                         {{ t.market_short or '—' }}
                     </td>
-                    <td class="{% if 'BUY' in (t.side or '') %}side-buy{% else %}side-sell{% endif %}">
-                        {{ t.side or '—' }}
+                    <td class="side-{{ t.direction }}">
+                        {{ t.side_display }}
                     </td>
                     <td>{{ t.price_fmt }}</td>
                     <td>${{ "%.2f"|format(t.size or 0) }}</td>
@@ -238,6 +263,24 @@
             </tbody>
         </table>
         </div>
+        <script>
+        function filterTrades(mode) {
+            var rows = document.querySelectorAll('#trade-body tr');
+            rows.forEach(function(row) {
+                if (mode === 'live') {
+                    row.style.display = row.dataset.status === 'dry_run' ? 'none' : '';
+                } else {
+                    row.style.display = '';
+                }
+            });
+            document.getElementById('btn-live').className = 'filter-btn' + (mode === 'live' ? ' active' : '');
+            document.getElementById('btn-all').className = 'filter-btn' + (mode === 'all' ? ' active' : '');
+        }
+        // Auto-filter on load when in live mode
+        {% if is_live %}
+        filterTrades('live');
+        {% endif %}
+        </script>
         {% else %}
         <div class="empty">No trades yet. Run the bot to generate trade data.</div>
         {% endif %}
