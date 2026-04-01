@@ -80,11 +80,9 @@ class ExitManager:
         Checks conditions in priority order.
         """
         # Get best bid from book
-        best_bid = None
-        total_bid_qty = 0.0
-        if book.bids:
-            best_bid = book.bids[0][0]
-            total_bid_qty = sum(qty for _, qty in book.bids)
+        best_bid = book.best_bid
+        bids = book.bids_as_tuples()
+        total_bid_qty = sum(qty for _, qty in bids)
 
         if best_bid is None:
             return None
@@ -315,12 +313,7 @@ class ExitManager:
                 continue
 
             # Update high-water mark
-            best_bid = None
-            if hasattr(book, "bids") and book.bids:
-                if isinstance(book.bids, list):
-                    best_bid = book.bids[0][0] if book.bids else None
-                elif hasattr(book, "best_bid"):
-                    best_bid = book.best_bid
+            best_bid = book.best_bid
 
             if best_bid is not None:
                 pos.update_high_water_mark(best_bid)
@@ -337,7 +330,8 @@ class ExitManager:
                     max_hold_seconds = self.cfg.max_hold_hours * 3600
                     drawdown_pct = (pos.avg_price - best_bid) / pos.avg_price if pos.avg_price > 0 else 0.0
                     pnl_pct = (best_bid - pos.avg_price) / pos.avg_price if pos.avg_price > 0 else 0.0
-                    total_bid_qty = sum(qty for _, qty in book.bids) if hasattr(book, "bids") and book.bids else 0.0
+                    bids = book.bids_as_tuples()
+                    total_bid_qty = sum(qty for _, qty in bids)
 
                     if hold_seconds >= max_hold_seconds:
                         signal = ExitSignal(

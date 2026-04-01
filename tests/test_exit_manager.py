@@ -52,8 +52,18 @@ class FakePosition:
 
 @dataclass
 class FakeBook:
-    """Order book stub. bids = [(price, qty), ...]"""
-    bids: list = field(default_factory=list)
+    """Order book stub matching OrderBookState API."""
+    _bids: list = field(default_factory=list)  # [(price, qty), ...]
+
+    def __init__(self, bids=None):
+        self._bids = bids or []
+
+    @property
+    def best_bid(self) -> Optional[float]:
+        return self._bids[0][0] if self._bids else None
+
+    def bids_as_tuples(self) -> list:
+        return list(self._bids)
 
 
 def make_manager(**cfg_overrides) -> ExitManager:
