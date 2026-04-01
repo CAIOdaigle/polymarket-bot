@@ -73,7 +73,10 @@ def _get_recent_trades(limit: int = 50) -> list[dict]:
 
             # Human-readable side display
             raw_side = (t.get("side") or "").upper()
-            if raw_side == "BUY_YES":
+            if raw_side == "BUY_YES_WEATHER":
+                t["side_display"] = "WX YES ▲"
+                t["direction"] = "weather"
+            elif raw_side == "BUY_YES":
                 t["side_display"] = "YES ▲"
                 t["direction"] = "buy"
             elif raw_side == "BUY_NO":
