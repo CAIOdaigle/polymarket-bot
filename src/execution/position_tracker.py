@@ -20,6 +20,7 @@ class Position:
     entry_time: float = 0.0  # timestamp of first fill
     high_water_mark: float = 0.0  # highest favorable price observed
     realized_pnl: float = 0.0  # accumulated realized PnL from partial exits
+    partial_profit_taken: bool = False  # True after staged take-profit fires
 
     @property
     def market_value(self) -> float:

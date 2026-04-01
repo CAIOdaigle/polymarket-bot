@@ -4,6 +4,7 @@ Position exit management — hybrid model-state + price-based exits.
 Exit conditions (priority order):
 1. Emergency floor — catastrophic drawdown guard (25%, model/data failure)
 2. Stop-loss — price-based drawdown guard (15%)
+2b. Take-profit — sell 50% at +15% gain (once per position)
 3. Edge floor — posterior flipped negative with confidence
 4. Edge convergence — trade played out, edge exhausted
 5. Time backstop — position held too long
@@ -30,6 +31,7 @@ class ExitReason(str, Enum):
     TIME_BACKSTOP = "time_backstop"
     EMERGENCY_FLOOR = "emergency_floor"
     STOP_LOSS = "stop_loss"
+    TAKE_PROFIT = "take_profit"
     LIQUIDITY_DEFER = "liquidity_defer"
 
 
@@ -123,6 +125,25 @@ class ExitManager:
                 entry_price=pos.avg_price,
                 pnl_pct=pnl_pct,
                 size_to_sell=pos.size,
+                edge_at_exit=edge,
+                confidence=confidence,
+            )
+            return self._apply_liquidity_gate(signal, pos, total_bid_qty)
+
+        # --- Priority 2b: Take-profit (partial sell to lock in gains) ---
+        if (
+            not pos.partial_profit_taken
+            and pnl_pct >= self.cfg.take_profit_pct
+        ):
+            sell_size = pos.size * self.cfg.take_profit_sell_fraction
+            signal = ExitSignal(
+                token_id=pos.token_id,
+                condition_id=pos.condition_id,
+                reason=ExitReason.TAKE_PROFIT,
+                current_price=best_bid,
+                entry_price=pos.avg_price,
+                pnl_pct=pnl_pct,
+                size_to_sell=sell_size,
                 edge_at_exit=edge,
                 confidence=confidence,
             )
@@ -254,6 +275,11 @@ class ExitManager:
                 size_sold=signal.size_to_sell,
                 exit_price=signal.current_price,
             )
+            # Mark take-profit flag so it only fires once
+            if signal.reason == ExitReason.TAKE_PROFIT:
+                remaining = self.positions.get_position(signal.token_id)
+                if remaining is not None:
+                    remaining.partial_profit_taken = True
             return True
 
         # Place real sell order
@@ -281,6 +307,12 @@ class ExitManager:
                     exit_price=signal.current_price,
                 )
                 self._last_exit_time[signal.token_id] = time.time()
+
+                # Mark take-profit flag so it only fires once
+                if signal.reason == ExitReason.TAKE_PROFIT:
+                    remaining = self.positions.get_position(signal.token_id)
+                    if remaining is not None:
+                        remaining.partial_profit_taken = True
 
                 # Persist position state
                 pos = self.positions.get_position(signal.token_id)

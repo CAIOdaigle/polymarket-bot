@@ -9,6 +9,7 @@ trading:
   price_tolerance: 0.005
   stale_order_timeout_seconds: 300
   daily_loss_limit_usd: 10.0
+  max_event_exposure_pct: 0.30
   dry_run: false
 
 lmsr:
@@ -79,6 +80,8 @@ signals:
 exit:
   enabled: true
   stop_loss_pct: 0.15
+  take_profit_pct: 0.15
+  take_profit_sell_fraction: 0.50
   edge_floor_threshold: -0.05
   edge_floor_confidence_min: 0.40
   edge_convergence_threshold: 0.03

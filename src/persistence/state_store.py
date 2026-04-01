@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS positions (
     entry_time REAL NOT NULL,
     high_water_mark REAL NOT NULL,
     realized_pnl REAL DEFAULT 0,
+    partial_profit_taken INTEGER DEFAULT 0,
     updated_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_positions_condition ON positions(condition_id);
@@ -83,6 +84,15 @@ class StateStore:
                 await self._db.commit()
             except Exception:
                 pass  # Column already exists
+
+        # Migrate positions table
+        try:
+            await self._db.execute(
+                "ALTER TABLE positions ADD COLUMN partial_profit_taken INTEGER DEFAULT 0"
+            )
+            await self._db.commit()
+        except Exception:
+            pass  # Column already exists
 
         logger.info("State store initialized at %s", self._path)
 
@@ -156,8 +166,8 @@ class StateStore:
         await self._db.execute(
             """INSERT OR REPLACE INTO positions
                (token_id, condition_id, side, size, avg_price, cost_basis,
-                entry_time, high_water_mark, realized_pnl, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                entry_time, high_water_mark, realized_pnl, partial_profit_taken, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 pos.token_id,
                 pos.condition_id,
@@ -168,6 +178,7 @@ class StateStore:
                 pos.entry_time,
                 pos.high_water_mark,
                 pos.realized_pnl,
+                1 if pos.partial_profit_taken else 0,
                 time.time(),
             ),
         )
@@ -184,7 +195,8 @@ class StateStore:
             return []
         cursor = await self._db.execute(
             "SELECT token_id, condition_id, side, size, avg_price, cost_basis, "
-            "entry_time, high_water_mark, realized_pnl FROM positions WHERE size > 0"
+            "entry_time, high_water_mark, realized_pnl, partial_profit_taken "
+            "FROM positions WHERE size > 0"
         )
         rows = await cursor.fetchall()
         positions = []
@@ -200,6 +212,7 @@ class StateStore:
                     entry_time=row[6],
                     high_water_mark=row[7],
                     realized_pnl=row[8],
+                    partial_profit_taken=bool(row[9]) if len(row) > 9 else False,
                 )
             )
         return positions

@@ -305,6 +305,27 @@ class TradingBot:
                     )
                     return
 
+            # 5c. Event exposure cap — prevent concentration in one event cluster
+            event_slug = market.event_slug
+            if event_slug:
+                max_event_usd = (
+                    self.config.trading.max_event_exposure_pct
+                    * self.config.trading.total_bankroll_usd
+                )
+                event_exposure = 0.0
+                for ep in self.positions.get_all_open():
+                    ep_market = self.scanner.get_market(ep.condition_id)
+                    if ep_market is not None and ep_market.event_slug == event_slug:
+                        event_exposure += ep.cost_basis
+                if event_exposure >= max_event_usd:
+                    logger.info(
+                        "Event exposure cap: %s has $%.2f deployed (max $%.2f) — skipping",
+                        event_slug[:30],
+                        event_exposure,
+                        max_event_usd,
+                    )
+                    return
+
             # 6. Kelly sizing (now uses ask prices, not mid)
             no_book = self._books.get(market.no_token_id)
             current_pos = self.positions.get_position_usd(condition_id)

@@ -44,6 +44,7 @@ class FakePosition:
     )
     high_water_mark: float = 0.50
     realized_pnl:    float = 0.0
+    partial_profit_taken: bool = False
 
     def update_high_water_mark(self, price: float):
         if price > self.high_water_mark:
@@ -130,10 +131,11 @@ class TestEdgeConvergence:
             edge_convergence_threshold=0.03,
             edge_convergence_min_hold_s=300,
         )
-        # Position entered 30 min ago
+        # Position entered 30 min ago (take-profit already fired)
         pos = FakePosition(
             avg_price=0.45,
             entry_time=time.time() - 1800,
+            partial_profit_taken=True,
         )
         # p_hat=0.62, best_bid=0.61 -> edge=0.01 < 0.03 threshold
         book = FakeBook(bids=[(0.61, 200)])
@@ -150,6 +152,7 @@ class TestEdgeConvergence:
         pos = FakePosition(
             avg_price=0.45,
             entry_time=time.time() - 120,  # 2 minutes ago
+            partial_profit_taken=True,
         )
         book = FakeBook(bids=[(0.61, 200)])
         signal = mgr.evaluate_position(pos, book, p_hat=0.62, confidence=0.80, market=None)
@@ -160,6 +163,7 @@ class TestEdgeConvergence:
         pos = FakePosition(
             avg_price=0.45,
             entry_time=time.time() - 7200,
+            partial_profit_taken=True,
         )
         # edge = 0.70 - 0.55 = 0.15 — well above threshold, hold the position
         book = FakeBook(bids=[(0.55, 200)])
@@ -172,6 +176,7 @@ class TestEdgeConvergence:
         pos = FakePosition(
             avg_price=0.45,
             entry_time=time.time() - 3600,
+            partial_profit_taken=True,
         )
         book = FakeBook(bids=[(0.61, 200)])
         signal = mgr.evaluate_position(pos, book, p_hat=0.62, confidence=0.80, market=None)
@@ -353,3 +358,43 @@ class TestOperational:
         with caplog.at_level(logging.INFO, logger="src.execution.exit_manager"):
             mgr.check_all_positions(books={}, bayesian=MagicMock(), scanner=MagicMock())
         assert "Exit sweep" in caplog.text or "0 open position" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# 7. Take-profit (staged partial exit)
+# ---------------------------------------------------------------------------
+
+class TestTakeProfit:
+
+    def test_triggers_partial_sell_at_profit_threshold(self):
+        """Position up 16% should sell 50% via take-profit."""
+        mgr = make_manager(take_profit_pct=0.15, take_profit_sell_fraction=0.50)
+        pos = FakePosition(avg_price=0.50, size=100, partial_profit_taken=False)
+        # best_bid=0.58 -> pnl = (0.58-0.50)/0.50 = 16%
+        book = FakeBook(bids=[(0.58, 200)])
+        signal = mgr.evaluate_position(pos, book, p_hat=0.62, confidence=0.80, market=None)
+        assert signal is not None
+        assert signal.reason == ExitReason.TAKE_PROFIT
+        assert signal.size_to_sell == 50.0  # 50% of 100
+
+    def test_does_not_trigger_when_already_taken(self):
+        """Once take-profit has fired, it should not fire again."""
+        mgr = make_manager(take_profit_pct=0.15, take_profit_sell_fraction=0.50)
+        pos = FakePosition(avg_price=0.50, size=50, partial_profit_taken=True)
+        book = FakeBook(bids=[(0.58, 200)])
+        signal = mgr.evaluate_position(pos, book, p_hat=0.62, confidence=0.80, market=None)
+        # Should NOT be take-profit (may be convergence or None)
+        if signal is not None:
+            assert signal.reason != ExitReason.TAKE_PROFIT
+
+    def test_stop_loss_takes_priority_over_take_profit(self):
+        """A position can't be both up 15% and down 15% — but stop-loss
+        should fire on drawdowns regardless of take-profit state."""
+        mgr = make_manager(stop_loss_pct=0.15, take_profit_pct=0.15)
+        pos = FakePosition(avg_price=0.50, size=100, partial_profit_taken=False)
+        # best_bid=0.42 -> drawdown = 16%, pnl = -16%
+        book = FakeBook(bids=[(0.42, 200)])
+        signal = mgr.evaluate_position(pos, book, p_hat=0.40, confidence=0.80, market=None)
+        assert signal is not None
+        assert signal.reason == ExitReason.STOP_LOSS
+        assert signal.size_to_sell == 100.0  # full position, not partial

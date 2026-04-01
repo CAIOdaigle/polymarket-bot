@@ -52,6 +52,7 @@ class TradingConfig(BaseSettings):
     price_tolerance: float = 0.005
     stale_order_timeout_seconds: int = 300
     daily_loss_limit_usd: float = 100.0
+    max_event_exposure_pct: float = 0.30  # max 30% of bankroll per event cluster
     dry_run: bool = True
 
     model_config = {"extra": "ignore"}
@@ -161,6 +162,8 @@ class SignalConfig(BaseSettings):
 class ExitConfig(BaseSettings):
     enabled: bool = True
     stop_loss_pct: float = 0.15  # 15% price-based stop-loss
+    take_profit_pct: float = 0.15  # +15% triggers partial take-profit
+    take_profit_sell_fraction: float = 0.50  # sell 50% of position
     edge_floor_threshold: float = -0.05
     edge_floor_confidence_min: float = 0.40  # lowered: sparse books rarely exceed 0.40
     edge_convergence_threshold: float = 0.03
