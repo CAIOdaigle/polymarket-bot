@@ -110,6 +110,28 @@ notifications:
   notify_on_startup: true
   daily_summary_hour_utc: 0
 
+weather:
+  enabled: true
+  min_edge: 0.08
+  max_positions_per_city: 1
+  min_hours_to_resolution: 6.0
+  max_days_to_resolution: 3
+  max_weather_exposure_pct: 0.40
+  forecast_cache_ttl_seconds: 3600.0
+  eval_interval_seconds: 300.0
+  cities:
+    - new-york
+    - chicago
+    - miami
+    - los-angeles
+    - houston
+    - phoenix
+    - denver
+    - atlanta
+    - dallas
+    - san-francisco
+    - seattle
+
 logging:
   level: "INFO"
   format: "json"

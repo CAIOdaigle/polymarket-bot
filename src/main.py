@@ -35,6 +35,8 @@ from src.sizing.entry_liquidity_gate import EntryLiquidityGate, EntryLiquidityCo
 from src.sizing.kelly_sizer import KellySizer
 from src.sizing.risk_manager import RiskManager
 from src.utils.logging_config import setup_logging
+from src.weather.forecast_client import WeatherForecastClient
+from src.weather.strategy import WeatherStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +118,20 @@ class TradingBot:
         self._shutdown_event = asyncio.Event()
         self._analysis_lock = asyncio.Lock()
 
+        # Weather strategy (separate pipeline from Bayesian)
+        weather_cfg = config.weather
+        self._weather_enabled = weather_cfg.enabled if weather_cfg else False
+        if self._weather_enabled:
+            self._forecast_client = WeatherForecastClient(
+                cache_ttl_seconds=weather_cfg.forecast_cache_ttl_seconds,
+            )
+            self._weather_strategy: WeatherStrategy | None = None  # initialized after scanner
+            self._weather_eval_interval = weather_cfg.eval_interval_seconds
+        else:
+            self._forecast_client = None
+            self._weather_strategy = None
+            self._weather_eval_interval = 300.0
+
         # Per-market trade cooldown (condition_id -> last trade timestamp)
         self._last_trade_time: dict[str, float] = {}
         self._trade_cooldown_seconds = 300.0  # 5 min — prevent hammering same market
@@ -153,11 +169,26 @@ class TradingBot:
         self.feed.on_price_change(self._on_price_change)
         self.feed.on_trade(self._on_trade)
 
+        # Initialize weather strategy now that scanner is ready
+        if self._weather_enabled and self._forecast_client is not None:
+            self._weather_strategy = WeatherStrategy(
+                config=self.config,
+                forecast_client=self._forecast_client,
+                order_mgr=self.order_mgr,
+                positions=self.positions,
+                scanner=self.scanner,
+                state_store=self.state_store,
+                books=self._books,
+            )
+            logger.info("Weather strategy initialized (%d cities enabled)",
+                        len(self.config.weather.cities))
+
         logger.info(
-            "Bot initialized: %d markets, dry_run=%s, bankroll=$%.2f",
+            "Bot initialized: %d markets, dry_run=%s, bankroll=$%.2f, weather=%s",
             len(markets),
             self.config.trading.dry_run,
             self.config.trading.total_bankroll_usd,
+            "enabled" if self._weather_enabled else "disabled",
         )
 
         await self.slack.notify_startup(
@@ -650,6 +681,32 @@ class TradingBot:
                     daily.date, daily.realized_pnl, daily.trades
                 )
 
+    # ---- Weather strategy ----
+
+    async def _periodic_weather_eval(self) -> None:
+        """Periodically evaluate weather markets for trading opportunities."""
+        interval = self._weather_eval_interval
+        # Initial delay — let order books populate first
+        await asyncio.sleep(60)
+        while not self._shutdown_event.is_set():
+            try:
+                if self._weather_strategy is not None:
+                    results = await self._weather_strategy.evaluate_and_trade()
+                    if results:
+                        logger.info(
+                            "Weather eval: %d trades placed",
+                            len(results),
+                        )
+                        for r in results:
+                            logger.info(
+                                "  %s %s %s edge=%.3f $%.2f (%s)",
+                                r.city, r.date, r.bucket_label,
+                                r.edge, r.position_usd, r.order_status,
+                            )
+            except Exception:
+                logger.exception("Weather evaluation failed")
+            await asyncio.sleep(interval)
+
     # ---- Lifecycle ----
 
     async def run(self) -> None:
@@ -666,6 +723,11 @@ class TradingBot:
             asyncio.create_task(self._periodic_exit_sweep(), name="exit_sweep"),
         ]
 
+        if self._weather_enabled:
+            tasks.append(
+                asyncio.create_task(self._periodic_weather_eval(), name="weather_eval")
+            )
+
         logger.info("Bot running — %d markets, waiting for data...", len(self.scanner.markets))
 
         await self._shutdown_event.wait()
@@ -677,6 +739,8 @@ class TradingBot:
             task.cancel()
         await self.scanner.close()
         await self.state_store.close()
+        if self._forecast_client is not None:
+            await self._forecast_client.close()
         logger.info("Shutdown complete")
 
     def request_shutdown(self) -> None:

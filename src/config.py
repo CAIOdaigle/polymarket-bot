@@ -215,6 +215,23 @@ class LoggingConfig(BaseSettings):
     model_config = {"extra": "ignore"}
 
 
+class WeatherConfig(BaseSettings):
+    enabled: bool = True
+    min_edge: float = 0.08
+    max_positions_per_city: int = 1
+    min_hours_to_resolution: float = 6.0
+    max_days_to_resolution: int = 3
+    max_weather_exposure_pct: float = 0.40
+    forecast_cache_ttl_seconds: float = 3600.0
+    eval_interval_seconds: float = 300.0  # how often to run weather strategy
+    cities: list[str] = Field(default_factory=lambda: [
+        "new-york", "chicago", "miami", "los-angeles", "houston",
+        "phoenix", "denver", "atlanta", "dallas", "san-francisco", "seattle",
+    ])
+
+    model_config = {"extra": "ignore"}
+
+
 class MarketFilterConfig(BaseSettings):
     include_slugs: list[str] = Field(default_factory=list)
     exclude_slugs: list[str] = Field(default_factory=list)
@@ -240,6 +257,7 @@ class BotConfig:
         slack: SlackConfig,
         logging: LoggingConfig,
         market_filter: MarketFilterConfig,
+        weather: Optional[WeatherConfig] = None,
     ):
         self.polymarket = polymarket
         self.trading = trading
@@ -254,6 +272,7 @@ class BotConfig:
         self.slack = slack
         self.logging = logging
         self.market_filter = market_filter
+        self.weather = weather or WeatherConfig()
 
 
 def load_config(env: Optional[str] = None) -> BotConfig:
@@ -264,6 +283,8 @@ def load_config(env: Optional[str] = None) -> BotConfig:
     merged = _deep_merge(defaults, overrides)
 
     filters = _load_yaml("markets_filter.yaml")
+
+    weather_cfg = merged.get("weather", {})
 
     return BotConfig(
         polymarket=PolymarketConfig(),
@@ -279,4 +300,5 @@ def load_config(env: Optional[str] = None) -> BotConfig:
         slack=SlackConfig(),
         logging=LoggingConfig(**merged.get("logging", {})),
         market_filter=MarketFilterConfig(**filters),
+        weather=WeatherConfig(**weather_cfg) if weather_cfg else WeatherConfig(),
     )
