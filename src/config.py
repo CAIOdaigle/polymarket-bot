@@ -160,8 +160,9 @@ class SignalConfig(BaseSettings):
 
 class ExitConfig(BaseSettings):
     enabled: bool = True
+    stop_loss_pct: float = 0.15  # 15% price-based stop-loss
     edge_floor_threshold: float = -0.05
-    edge_floor_confidence_min: float = 0.60
+    edge_floor_confidence_min: float = 0.40  # lowered: sparse books rarely exceed 0.40
     edge_convergence_threshold: float = 0.03
     edge_convergence_min_hold_s: float = 300.0
     min_exit_liquidity_pct: float = 0.80

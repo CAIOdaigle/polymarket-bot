@@ -1,15 +1,13 @@
 """
-Position exit management — model-state-driven exits.
+Position exit management — hybrid model-state + price-based exits.
 
 Exit conditions (priority order):
-1. Emergency floor — catastrophic drawdown guard (model/data failure)
-2. Edge floor — posterior flipped negative with confidence
-3. Edge convergence — trade played out, edge exhausted
-4. Time backstop — position held too long
-5. Liquidity gate — defers exit if book too thin for clean execution
-
-Philosophy: All exits are driven by MODEL STATE (edge, confidence, time),
-not price movement. There is no stop-loss or take-profit based on price alone.
+1. Emergency floor — catastrophic drawdown guard (25%, model/data failure)
+2. Stop-loss — price-based drawdown guard (15%)
+3. Edge floor — posterior flipped negative with confidence
+4. Edge convergence — trade played out, edge exhausted
+5. Time backstop — position held too long
+6. Liquidity gate — defers exit if book too thin for clean execution
 """
 
 from __future__ import annotations
@@ -31,6 +29,7 @@ class ExitReason(str, Enum):
     EDGE_CONVERGENCE = "edge_convergence"
     TIME_BACKSTOP = "time_backstop"
     EMERGENCY_FLOOR = "emergency_floor"
+    STOP_LOSS = "stop_loss"
     LIQUIDITY_DEFER = "liquidity_defer"
 
 
@@ -116,7 +115,22 @@ class ExitManager:
             )
             return self._apply_liquidity_gate(signal, pos, total_bid_qty)
 
-        # --- Priority 2: Edge floor (posterior flipped with conviction) ---
+        # --- Priority 2: Price-based stop-loss ---
+        if drawdown_pct >= self.cfg.stop_loss_pct:
+            signal = ExitSignal(
+                token_id=pos.token_id,
+                condition_id=pos.condition_id,
+                reason=ExitReason.STOP_LOSS,
+                current_price=best_bid,
+                entry_price=pos.avg_price,
+                pnl_pct=pnl_pct,
+                size_to_sell=pos.size,
+                edge_at_exit=edge,
+                confidence=confidence,
+            )
+            return self._apply_liquidity_gate(signal, pos, total_bid_qty)
+
+        # --- Priority 3: Edge floor (posterior flipped with conviction) ---
         _EPS = 1e-9  # tolerance for floating-point boundary comparisons
         if (
             edge <= self.cfg.edge_floor_threshold + _EPS
@@ -135,7 +149,7 @@ class ExitManager:
             )
             return self._apply_liquidity_gate(signal, pos, total_bid_qty)
 
-        # --- Priority 3: Edge convergence (trade played out) ---
+        # --- Priority 4: Edge convergence (trade played out) ---
         hold_seconds = time.time() - pos.entry_time
         if (
             hold_seconds >= self.cfg.edge_convergence_min_hold_s
@@ -154,7 +168,7 @@ class ExitManager:
             )
             return self._apply_liquidity_gate(signal, pos, total_bid_qty)
 
-        # --- Priority 4: Time backstop ---
+        # --- Priority 5: Time backstop ---
         max_hold_seconds = self.cfg.max_hold_hours * 3600
         if hold_seconds >= max_hold_seconds:
             signal = ExitSignal(
@@ -313,7 +327,51 @@ class ExitManager:
 
             # Get Bayesian estimate
             p_hat = bayesian.get_estimate(pos.condition_id) if bayesian else None
+
             if p_hat is None:
+                # No model estimate yet (e.g. after restart before data arrives).
+                # Still check time backstop and price-based exits so stale
+                # positions don't linger forever.
+                if best_bid is not None:
+                    hold_seconds = time.time() - pos.entry_time
+                    max_hold_seconds = self.cfg.max_hold_hours * 3600
+                    drawdown_pct = (pos.avg_price - best_bid) / pos.avg_price if pos.avg_price > 0 else 0.0
+                    pnl_pct = (best_bid - pos.avg_price) / pos.avg_price if pos.avg_price > 0 else 0.0
+                    total_bid_qty = sum(qty for _, qty in book.bids) if hasattr(book, "bids") and book.bids else 0.0
+
+                    if hold_seconds >= max_hold_seconds:
+                        signal = ExitSignal(
+                            token_id=pos.token_id,
+                            condition_id=pos.condition_id,
+                            reason=ExitReason.TIME_BACKSTOP,
+                            current_price=best_bid,
+                            entry_price=pos.avg_price,
+                            pnl_pct=pnl_pct,
+                            size_to_sell=pos.size,
+                        )
+                        signals.append(self._apply_liquidity_gate(signal, pos, total_bid_qty))
+                    elif drawdown_pct >= self.cfg.stop_loss_pct:
+                        signal = ExitSignal(
+                            token_id=pos.token_id,
+                            condition_id=pos.condition_id,
+                            reason=ExitReason.STOP_LOSS,
+                            current_price=best_bid,
+                            entry_price=pos.avg_price,
+                            pnl_pct=pnl_pct,
+                            size_to_sell=pos.size,
+                        )
+                        signals.append(self._apply_liquidity_gate(signal, pos, total_bid_qty))
+                    elif drawdown_pct >= self.cfg.emergency_floor_pct:
+                        signal = ExitSignal(
+                            token_id=pos.token_id,
+                            condition_id=pos.condition_id,
+                            reason=ExitReason.EMERGENCY_FLOOR,
+                            current_price=best_bid,
+                            entry_price=pos.avg_price,
+                            pnl_pct=pnl_pct,
+                            size_to_sell=pos.size,
+                        )
+                        signals.append(self._apply_liquidity_gate(signal, pos, total_bid_qty))
                 continue
 
             # Get LMSR confidence if available

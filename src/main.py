@@ -291,6 +291,20 @@ class TradingBot:
             if not can_trade:
                 return
 
+            # 5b. Hedge prevention — don't buy opposite side of same market
+            for existing_pos in self.positions.get_all_open():
+                if existing_pos.condition_id == condition_id:
+                    # We already have a position on this market.
+                    # Block any new entry (Kelly will pick a side; if it picks
+                    # the opposite side we'd be self-hedging).
+                    logger.info(
+                        "Hedge prevention: already hold %s %s on %s — skipping new entry",
+                        existing_pos.side,
+                        f"{existing_pos.size:.1f} shares",
+                        condition_id[:16],
+                    )
+                    return
+
             # 6. Kelly sizing (now uses ask prices, not mid)
             no_book = self._books.get(market.no_token_id)
             current_pos = self.positions.get_position_usd(condition_id)

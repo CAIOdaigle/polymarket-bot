@@ -78,8 +78,9 @@ signals:
 
 exit:
   enabled: true
+  stop_loss_pct: 0.15
   edge_floor_threshold: -0.05
-  edge_floor_confidence_min: 0.60
+  edge_floor_confidence_min: 0.40
   edge_convergence_threshold: 0.03
   edge_convergence_min_hold_s: 300
   min_exit_liquidity_pct: 0.80
