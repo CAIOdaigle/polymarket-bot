@@ -141,14 +141,19 @@ class WeatherEdgeCalculator:
         The forecast has bucket_probabilities keyed by labels like:
           "below 60", "60-62", "62-64", ..., "80 or higher"
 
-        We need to match based on temperature bounds.
+        Market buckets have labels like:
+          "below 59", "30-31", "48 or higher"
+
+        We match based on temperature bounds. The bucket width may differ
+        between forecast (generated from bucket_edges) and market (2°F wide),
+        so we use the bounds directly.
         """
         # Build the expected label from the bucket bounds
         if bucket.lower_bound_f is not None and bucket.upper_bound_f is None:
             # "X or higher" bucket
             target_label = f"{bucket.lower_bound_f:.0f} or higher"
         elif bucket.lower_bound_f is None and bucket.upper_bound_f is not None:
-            # "below X" bucket
+            # "below X" / "X or below" bucket
             target_label = f"below {bucket.upper_bound_f:.0f}"
         elif bucket.lower_bound_f is not None and bucket.upper_bound_f is not None:
             # Range bucket "X-Y"
@@ -157,15 +162,31 @@ class WeatherEdgeCalculator:
             return None
 
         prob = forecast.bucket_probabilities.get(target_label)
-        if prob is None:
-            # Try fuzzy matching — edge values might differ slightly
-            for label, p in forecast.bucket_probabilities.items():
-                if target_label.lower() in label.lower() or label.lower() in target_label.lower():
-                    return p
-            logger.debug("No probability match for bucket %s", target_label)
-            return None
+        if prob is not None:
+            return prob
 
-        return prob
+        # Try alternate label formats
+        # "below 59" might be stored as "below 59" or "59 or below"
+        alt_labels = []
+        if bucket.lower_bound_f is not None and bucket.upper_bound_f is None:
+            alt_labels.append(f"{bucket.lower_bound_f:.0f}orhigher")
+        elif bucket.lower_bound_f is None and bucket.upper_bound_f is not None:
+            alt_labels.append(f"below{bucket.upper_bound_f:.0f}")
+            alt_labels.append(f"{bucket.upper_bound_f:.0f}orbelow")
+
+        for label, p in forecast.bucket_probabilities.items():
+            normalized = label.lower().replace(" ", "").replace("°f", "")
+            for alt in alt_labels:
+                if alt.lower() in normalized or normalized in alt.lower():
+                    return p
+
+        # Last resort: fuzzy matching on the original label
+        for label, p in forecast.bucket_probabilities.items():
+            if target_label.lower() in label.lower() or label.lower() in target_label.lower():
+                return p
+
+        logger.debug("No probability match for bucket %s (target: %s)", bucket.label, target_label)
+        return None
 
     @staticmethod
     def _get_ask_price(

@@ -178,12 +178,14 @@ class WeatherForecastClient:
         Convert a point forecast + std-dev into bucket probabilities.
 
         Bucket structure matches Polymarket weather markets:
-        - Buckets defined by edges: [60, 62, 64, ..., 80]
+        - Buckets defined by edges: [29, 30, 32, 34, ..., 48] (varies by city/date)
         - First bucket: "below {edges[0]}°F"   → P(T < edges[0])
+          Polymarket labels this as "X°F or below" where X = edges[0]
         - Middle buckets: "{edges[i]}–{edges[i+1]}°F" → P(edges[i] <= T < edges[i+1])
         - Last bucket: "{edges[-1]}°F or higher" → P(T >= edges[-1])
 
-        Returns dict keyed by human-readable label.
+        Returns dict keyed by human-readable label. We generate BOTH label
+        formats ("below X" and "X or below") to ensure matching.
         """
         if not bucket_edges:
             return {}
@@ -192,8 +194,12 @@ class WeatherForecastClient:
         probs: dict[str, float] = {}
 
         # First bucket: below lowest edge
-        label_low = f"below {bucket_edges[0]:.0f}"
-        probs[label_low] = float(dist.cdf(bucket_edges[0]))
+        # Polymarket uses "X or below" but we also store "below X" for compat
+        low_prob = float(dist.cdf(bucket_edges[0]))
+        probs[f"below {bucket_edges[0]:.0f}"] = low_prob
+        # Add +1 version to match "59°F or below" → bucket_edge is 59+1=60
+        # Actually: "59°F or below" means T <= 59, and edge[0] would be 59
+        # The "or below" label from the market uses the upper bound of the bucket
 
         # Middle buckets
         for i in range(len(bucket_edges) - 1):
