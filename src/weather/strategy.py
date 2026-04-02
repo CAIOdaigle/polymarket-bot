@@ -250,13 +250,22 @@ class WeatherStrategy:
         """Place a trade for a weather bucket."""
         bucket = edge.bucket
 
+        # Bump price by 2 ticks above observed ask to cross the spread
+        # and fill immediately in thin weather markets.
+        tick = bucket.tick_size or 0.01
+        fill_price = round(edge.ask_price + 2 * tick, 10)
+        fill_price = min(fill_price, 0.99)  # never pay more than $0.99
+
+        # Recalculate shares at the higher fill price to stay within budget
+        fill_shares = round(edge.position_size_usd / fill_price, 2)
+
         request = TradeRequest(
             condition_id=bucket.condition_id,
             token_id=bucket.token_id_yes,
             side="BUY",
-            price=edge.ask_price,
-            size=edge.position_size_shares,
-            order_type=self.config.kelly.order_type,
+            price=fill_price,
+            size=fill_shares,
+            order_type="FOK",  # Fill or Kill — instant fill or cancel
             edge=edge.edge,
             kelly_fraction=edge.kelly_fraction,
             neg_risk=bucket.neg_risk,
@@ -264,9 +273,9 @@ class WeatherStrategy:
         )
 
         logger.info(
-            "Weather trade: %s %s %s P_noaa=%.3f ask=%.3f edge=%.3f $%.2f",
+            "Weather trade: %s %s %s P_noaa=%.3f ask=%.3f fill=%.3f edge=%.3f $%.2f",
             event.city, event.date, bucket.label,
-            edge.p_noaa, edge.ask_price, edge.edge, edge.position_size_usd,
+            edge.p_noaa, edge.ask_price, fill_price, edge.edge, edge.position_size_usd,
         )
 
         order = await self.order_mgr.place_order(request)
