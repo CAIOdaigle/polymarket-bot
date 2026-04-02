@@ -10,6 +10,7 @@ Philosophy:
   - EMERGENCY_FLOOR is tested as a rare circuit breaker, not a routine stop-loss.
 """
 
+import asyncio
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -216,7 +217,7 @@ class TestLiquidityGate:
             entry_price=0.50, pnl_pct=-0.04, size_to_sell=100,
             edge_at_exit=-0.08, confidence=0.75, deferred=True,
         )
-        result = mgr.execute_exit(signal, market=None)
+        result = asyncio.run(mgr.execute_exit(signal, market=None))
         assert result is False
         mgr.order_mgr.place_order.assert_not_called()
 
@@ -309,7 +310,7 @@ class TestOperational:
             entry_price=0.50, pnl_pct=-0.04, size_to_sell=100,
             edge_at_exit=-0.08, confidence=0.75,
         )
-        result = mgr.execute_exit(signal, market=None)
+        result = asyncio.run(mgr.execute_exit(signal, market=None))
         assert result is False
         mgr.order_mgr.place_order.assert_not_called()
 
@@ -321,7 +322,7 @@ class TestOperational:
             entry_price=0.45, pnl_pct=0.355, size_to_sell=100,
             edge_at_exit=0.01, confidence=0.80,
         )
-        result = mgr.execute_exit(signal, market=None, dry_run=True)
+        result = asyncio.run(mgr.execute_exit(signal, market=None, dry_run=True))
         assert result is True
         mgr.order_mgr.place_order.assert_not_called()
 
@@ -345,7 +346,7 @@ class TestOperational:
             entry_price=0.50, pnl_pct=-0.04, size_to_sell=100,
             edge_at_exit=-0.08, confidence=0.75,
         )
-        mgr.execute_exit(signal, market=None, dry_run=True)
+        asyncio.run(mgr.execute_exit(signal, market=None, dry_run=True))
         mgr.positions.reduce_position.assert_called_once_with(
             token_id="tok_yes_001", size_sold=100, exit_price=0.48
         )

@@ -517,7 +517,7 @@ class TradingBot:
             if signal is None:
                 continue
 
-            executed = self.exit_mgr.execute_exit(
+            executed = await self.exit_mgr.execute_exit(
                 signal, market, dry_run=self.config.trading.dry_run
             )
             if executed:
@@ -601,7 +601,7 @@ class TradingBot:
                 for signal in signals:
                     market = self.scanner.get_market(signal.condition_id)
                     pos = self.positions.get_position(signal.token_id)
-                    executed = self.exit_mgr.execute_exit(
+                    executed = await self.exit_mgr.execute_exit(
                         signal, market, dry_run=self.config.trading.dry_run
                     )
                     if executed:

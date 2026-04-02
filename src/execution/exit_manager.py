@@ -238,7 +238,7 @@ class ExitManager:
             )
         return signal
 
-    def execute_exit(
+    async def execute_exit(
         self,
         signal: ExitSignal,
         market=None,
@@ -298,7 +298,7 @@ class ExitManager:
                 neg_risk=getattr(market, "neg_risk", False) if market else False,
                 tick_size=getattr(market, "tick_size", 0.01) if market else 0.01,
             )
-            order = self.order_mgr.place_order(request)
+            order = await self.order_mgr.place_order(request)
 
             if order.status != "failed":
                 self.positions.reduce_position(
@@ -317,9 +317,9 @@ class ExitManager:
                 # Persist position state
                 pos = self.positions.get_position(signal.token_id)
                 if pos:
-                    self.state_store.save_position(pos)
+                    await self.state_store.save_position(pos)
                 else:
-                    self.state_store.delete_position(signal.token_id)
+                    await self.state_store.delete_position(signal.token_id)
 
                 return True
 
