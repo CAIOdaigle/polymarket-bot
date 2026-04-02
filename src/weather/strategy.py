@@ -336,8 +336,8 @@ class WeatherStrategy:
     @staticmethod
     def _is_weather_market(market) -> bool:
         """Check if a market belongs to a weather event."""
-        from src.weather.market_scanner import WEATHER_SLUG_PATTERN
-        return bool(WEATHER_SLUG_PATTERN.search(market.event_slug or ""))
+        from src.weather.market_scanner import DAILY_WEATHER_PATTERN
+        return bool(DAILY_WEATHER_PATTERN.match(market.event_slug or ""))
 
     def _log_forecast(self, forecast: WeatherForecast, event: WeatherEvent) -> None:
         """Log forecast data for future calibration (Phase 2)."""
