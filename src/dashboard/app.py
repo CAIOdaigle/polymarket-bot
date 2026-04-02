@@ -97,13 +97,18 @@ def _get_recent_trades(limit: int = 50) -> list[dict]:
             conf = t.get("confidence")
             t["conf_fmt"] = f"{conf:.2f}" if conf else "—"
 
-            # Projected profit: if correct, payout is $1/share - cost
+            # Size field is in SHARES, compute USD cost for display
             price = t.get("price") or 0
-            size_usd = t.get("size") or 0
-            side = t.get("side") or ""
-            if price > 0 and price < 1 and size_usd > 0:
-                shares = size_usd / price
-                profit_usd = shares * (1.0 - price)  # payout - cost = shares*(1-p)
+            shares = t.get("size") or 0
+            if price > 0 and shares > 0:
+                cost_usd = shares * price
+                t["size_display"] = f"${cost_usd:.2f}"
+            else:
+                t["size_display"] = "—"
+
+            # Projected profit: if correct, payout is $1/share - cost
+            if price > 0 and price < 1 and shares > 0:
+                profit_usd = shares * (1.0 - price)  # payout - cost
                 profit_pct = (1.0 - price) / price * 100  # ROI %
                 t["proj_profit_usd"] = f"${profit_usd:.2f}"
                 t["proj_profit_pct"] = f"{profit_pct:.0f}%"

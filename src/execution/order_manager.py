@@ -157,8 +157,12 @@ class OrderManager:
                 )
                 return record
 
-            except Exception:
-                logger.exception("Failed to place order for %s", request.condition_id)
+            except Exception as exc:
+                logger.exception(
+                    "Failed to place order for %s (side=%s token=%s price=%.4f size=%.2f neg_risk=%s tick=%s): %s",
+                    request.condition_id, request.side, request.token_id[:10],
+                    price, request.size, request.neg_risk, request.tick_size, exc,
+                )
                 record = OrderRecord(
                     order_id=f"FAILED-{int(time.time()*1000)}",
                     condition_id=request.condition_id,
