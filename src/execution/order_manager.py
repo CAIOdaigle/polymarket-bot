@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from py_clob_client.client import ClobClient
-from py_clob_client.clob_types import OrderArgs, OrderType
+from py_clob_client.clob_types import OrderArgs, OrderType, CreateOrderOptions
 
 from src.config import PolymarketConfig, TradingConfig
 from src.execution.auth import create_clob_client
@@ -121,7 +121,10 @@ class OrderManager:
                         None,
                         lambda: self._client.create_and_post_order(
                             order_args,
-                            options={"neg_risk": True, "tick_size": str(request.tick_size)},
+                            options=CreateOrderOptions(
+                                neg_risk=True,
+                                tick_size=str(request.tick_size),
+                            ),
                         ),
                     )
                 else:
