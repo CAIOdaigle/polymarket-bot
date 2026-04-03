@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import os
 import sqlite3
 from datetime import datetime, timezone
@@ -14,6 +15,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 DB_PATH = BASE_DIR / "data" / "bot.db"
 CSV_PATH = BASE_DIR / "data" / "trades.csv"
 CONFIG_PATH = BASE_DIR / "config" / "default.yaml"
+PORTFOLIO_PATH = BASE_DIR / "data" / "portfolio.json"
 
 app = Flask(__name__, template_folder=str(Path(__file__).parent / "templates"))
 
@@ -202,6 +204,26 @@ def _get_trade_stats() -> dict:
         conn.close()
 
 
+def _get_portfolio() -> dict:
+    """Read live portfolio snapshot written by the bot."""
+    try:
+        if PORTFOLIO_PATH.exists():
+            data = json.loads(PORTFOLIO_PATH.read_text())
+            return data
+    except Exception:
+        pass
+    return {
+        "usdc_balance": 0,
+        "deployed_cost": 0,
+        "market_value": 0,
+        "portfolio_value": 0,
+        "open_positions": 0,
+        "max_position_usd": 0,
+        "daily_loss_limit_usd": 0,
+        "updated_at": None,
+    }
+
+
 def _get_csv_trade_count() -> int:
     if not CSV_PATH.exists():
         return 0
@@ -220,6 +242,7 @@ def dashboard():
     stats = _get_trade_stats()
     daily_pnl = _get_daily_pnl()
     csv_count = _get_csv_trade_count()
+    portfolio = _get_portfolio()
 
     # Prepare chart data
     pnl_dates = [d["date"] for d in reversed(daily_pnl)]
@@ -237,6 +260,7 @@ def dashboard():
         pnl_dates=pnl_dates,
         pnl_values=pnl_values,
         is_live=is_live,
+        portfolio=portfolio,
         now=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
     )
 

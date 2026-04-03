@@ -168,34 +168,34 @@
 
     <div class="cards">
         <div class="card">
-            <div class="label">{% if is_live %}Live Trades{% else %}Total Trades{% endif %}</div>
-            <div class="value blue">{% if is_live %}{{ stats.live_trades }}{% else %}{{ stats.total_trades }}{% endif %}</div>
-            <div class="sub">{{ stats.dry_run_trades }} dry-run / {{ stats.live_trades }} live</div>
+            <div class="label">Portfolio Value</div>
+            <div class="value green">${{ "%.2f"|format(portfolio.portfolio_value) }}</div>
+            <div class="sub">Cash: ${{ "%.2f"|format(portfolio.usdc_balance) }} &bull; Positions: ${{ "%.2f"|format(portfolio.market_value) }}</div>
+        </div>
+        <div class="card">
+            <div class="label">Open Positions</div>
+            <div class="value blue">{{ portfolio.open_positions }}</div>
+            <div class="sub">Deployed: ${{ "%.2f"|format(portfolio.deployed_cost) }} cost basis</div>
         </div>
         <div class="card">
             <div class="label">Average Edge</div>
             <div class="value {% if stats.avg_edge > 0 %}green{% else %}red{% endif %}">
                 {{ "%.1f"|format(stats.avg_edge * 100) }}%
             </div>
-            <div class="sub">Across all trades</div>
+            <div class="sub">{{ stats.live_trades }} live trades</div>
         </div>
         <div class="card">
-            <div class="label">Bankroll</div>
-            <div class="value">${{ "%.2f"|format(config.get('total_bankroll_usd', 0)) }}</div>
-            <div class="sub">Max position: ${{ "%.2f"|format(config.get('max_position_usd', 0)) }}</div>
-        </div>
-        <div class="card">
-            <div class="label">Kelly Fraction</div>
-            <div class="value yellow">{{ "%.0f"|format(config.get('kelly_fraction', 0.5) * 100) }}%</div>
-            <div class="sub">Min edge: {{ "%.0f"|format(config.get('min_edge_threshold', 0.02) * 100) }}%</div>
+            <div class="label">Max Position</div>
+            <div class="value yellow">${{ "%.2f"|format(portfolio.max_position_usd or config.get('max_position_usd', 0)) }}</div>
+            <div class="sub">~3.3% of portfolio</div>
         </div>
         <div class="card">
             <div class="label">Daily Loss Limit</div>
-            <div class="value red">${{ "%.2f"|format(config.get('daily_loss_limit_usd', 0)) }}</div>
+            <div class="value red">${{ "%.2f"|format(portfolio.daily_loss_limit_usd or config.get('daily_loss_limit_usd', 0)) }}</div>
             <div class="sub">Max exposure: {{ "%.0f"|format(config.get('max_portfolio_exposure', 0.5) * 100) }}%</div>
         </div>
         <div class="card">
-            <div class="label">CSV Trade Log</div>
+            <div class="label">Trade Log</div>
             <div class="value">{{ csv_count }}</div>
             <div class="sub">Entries in data/trades.csv</div>
         </div>
@@ -292,8 +292,8 @@
         <div class="config-grid">
             <div>
                 <div class="config-item">
-                    <span class="key">Dry Run</span>
-                    <span class="val">{{ config.get('dry_run', 'true') }}</span>
+                    <span class="key">Mode</span>
+                    <span class="val">{% if config.get('dry_run', true) %}Dry Run{% else %}Live Trading{% endif %}</span>
                 </div>
                 <div class="config-item">
                     <span class="key">Kelly Fraction</span>
@@ -301,29 +301,29 @@
                 </div>
                 <div class="config-item">
                     <span class="key">Min Edge</span>
-                    <span class="val">{{ config.get('min_edge_threshold', '—') }}</span>
+                    <span class="val">{{ "%.0f"|format(config.get('min_edge_threshold', 0.05) * 100) }}%</span>
                 </div>
                 <div class="config-item">
-                    <span class="key">Max Position</span>
-                    <span class="val">${{ config.get('max_position_usd', '—') }}</span>
+                    <span class="key">Order Type</span>
+                    <span class="val">{{ config.get('order_type', 'GTC') }}</span>
                 </div>
             </div>
             <div>
-                <div class="config-item">
-                    <span class="key">Bankroll</span>
-                    <span class="val">${{ config.get('total_bankroll_usd', '—') }}</span>
-                </div>
                 <div class="config-item">
                     <span class="key">Max Exposure</span>
                     <span class="val">{{ "%.0f"|format(config.get('max_portfolio_exposure', 0.5) * 100) }}%</span>
                 </div>
                 <div class="config-item">
-                    <span class="key">Daily Loss Limit</span>
-                    <span class="val">${{ config.get('daily_loss_limit_usd', '—') }}</span>
+                    <span class="key">Weather Markets</span>
+                    <span class="val">Enabled (8% min edge)</span>
                 </div>
                 <div class="config-item">
-                    <span class="key">Order Type</span>
-                    <span class="val">{{ config.get('order_type', 'GTC') }}</span>
+                    <span class="key">Portfolio Updated</span>
+                    <span class="val">{{ portfolio.updated_at[:19] if portfolio.updated_at else '—' }}</span>
+                </div>
+                <div class="config-item">
+                    <span class="key">Bankroll Mode</span>
+                    <span class="val">Dynamic (live balance)</span>
                 </div>
             </div>
         </div>

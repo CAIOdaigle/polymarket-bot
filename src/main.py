@@ -7,10 +7,13 @@ Pipeline: WebSocket → OrderBook → LMSR → Signals → Bayesian → Kelly �
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import signal
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 
 from src.analysis.bayesian_engine import BayesianEngine
 from src.analysis.lmsr_engine import LMSREngine
@@ -683,6 +686,64 @@ class TradingBot:
 
     # ---- Weather strategy ----
 
+    async def _periodic_balance_refresh(self) -> None:
+        """Fetch live USDC balance and write portfolio snapshot for dashboard."""
+        balance_path = Path("data/portfolio.json")
+        while True:
+            try:
+                await asyncio.sleep(60)  # refresh every 60 seconds
+
+                usdc_balance = await self.order_mgr.get_usdc_balance()
+                deployed = self.positions.get_total_deployed()
+                open_positions = self.positions.get_all_open()
+
+                # Estimate market value of open positions using latest book data
+                market_value = 0.0
+                for pos in open_positions:
+                    book = self._books.get(pos.token_id)
+                    if book and book.best_bid is not None:
+                        market_value += pos.size * book.best_bid
+                    else:
+                        market_value += pos.cost_basis  # fallback to cost
+
+                portfolio_value = usdc_balance + market_value
+
+                # Update the config bankroll dynamically
+                self.config.trading.total_bankroll_usd = portfolio_value
+                self.config.kelly.total_bankroll_usd = portfolio_value
+
+                # Scale daily loss limit to 3.3% of portfolio
+                self.config.trading.daily_loss_limit_usd = round(portfolio_value * 0.033, 2)
+
+                # Scale max position to ~3.3% of portfolio (min $5)
+                self.config.kelly.max_position_usd = max(5.0, round(portfolio_value * 0.033, 2))
+                self.config.trading.max_position_usd = self.config.kelly.max_position_usd
+
+                snapshot = {
+                    "usdc_balance": round(usdc_balance, 2),
+                    "deployed_cost": round(deployed, 2),
+                    "market_value": round(market_value, 2),
+                    "portfolio_value": round(portfolio_value, 2),
+                    "open_positions": len(open_positions),
+                    "max_position_usd": self.config.kelly.max_position_usd,
+                    "daily_loss_limit_usd": self.config.trading.daily_loss_limit_usd,
+                    "updated_at": datetime.now(tz=timezone.utc).isoformat(),
+                }
+
+                balance_path.parent.mkdir(parents=True, exist_ok=True)
+                balance_path.write_text(json.dumps(snapshot, indent=2))
+
+                logger.info(
+                    "Portfolio: cash=$%.2f deployed=$%.2f market_val=$%.2f total=$%.2f",
+                    usdc_balance, deployed, market_value, portfolio_value,
+                )
+
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Balance refresh failed")
+                await asyncio.sleep(60)
+
     async def _periodic_weather_eval(self) -> None:
         """Periodically evaluate weather markets for trading opportunities."""
         interval = self._weather_eval_interval
@@ -721,6 +782,7 @@ class TradingBot:
             asyncio.create_task(self._periodic_signal_decay(), name="decay"),
             asyncio.create_task(self._periodic_daily_summary(), name="daily"),
             asyncio.create_task(self._periodic_exit_sweep(), name="exit_sweep"),
+            asyncio.create_task(self._periodic_balance_refresh(), name="balance"),
         ]
 
         if self._weather_enabled:
