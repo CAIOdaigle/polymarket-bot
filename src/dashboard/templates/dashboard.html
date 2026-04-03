@@ -228,8 +228,8 @@
                     <th>Size</th>
                     <th>Edge</th>
                     <th>Confidence</th>
-                    <th>Proj. Profit</th>
-                    <th>Proj. ROI</th>
+                    <th>P&L</th>
+                    <th>ROI</th>
                     <th>Status</th>
                 </tr>
             </thead>
@@ -247,8 +247,8 @@
                     <td>{{ t.size_display }}</td>
                     <td>{{ t.edge_pct }}</td>
                     <td>{{ t.conf_fmt }}</td>
-                    <td class="green">{{ t.proj_profit_usd }}</td>
-                    <td class="green">{{ t.proj_profit_pct }}</td>
+                    <td class="{{ t.pnl_class }}">{{ t.actual_pnl }}</td>
+                    <td class="{{ t.pnl_class }}">{{ t.actual_roi }}</td>
                     <td>
                         <span class="badge
                             {% if t.status == 'dry_run' %}badge-dry

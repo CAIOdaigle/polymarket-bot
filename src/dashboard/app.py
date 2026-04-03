@@ -106,22 +106,61 @@ def _get_recent_trades(limit: int = 50) -> list[dict]:
             else:
                 t["size_display"] = "—"
 
-            # Projected profit: if correct, payout is $1/share - cost
-            if price > 0 and price < 1 and shares > 0:
-                profit_usd = shares * (1.0 - price)  # payout - cost
-                profit_pct = (1.0 - price) / price * 100  # ROI %
-                t["proj_profit_usd"] = f"${profit_usd:.2f}"
-                t["proj_profit_pct"] = f"{profit_pct:.0f}%"
-            else:
-                t["proj_profit_usd"] = "—"
-                t["proj_profit_pct"] = "—"
+            # Actual P&L: only computed for EXIT trades
+            t["actual_pnl"] = "—"
+            t["actual_roi"] = "—"
+            t["pnl_class"] = ""
 
             trades.append(t)
+
+        # Second pass: compute actual P&L for EXIT trades by looking up entry prices
+        _enrich_exit_pnl(conn, trades)
+
         return trades
     except Exception:
         return []
     finally:
         conn.close()
+
+
+def _enrich_exit_pnl(conn, trades: list[dict]) -> None:
+    """For each EXIT trade, find its entry and compute actual P&L."""
+    # Cache: condition_id → entry avg price (from the most recent BUY for that condition)
+    entry_cache: dict[str, float] = {}
+
+    for t in trades:
+        raw_side = (t.get("side") or "").upper()
+        if not raw_side.startswith("SELL"):
+            continue
+
+        cond_id = t.get("condition_id")
+        if not cond_id:
+            continue
+
+        # Look up entry price for this condition
+        if cond_id not in entry_cache:
+            row = conn.execute(
+                """SELECT price FROM orders
+                   WHERE condition_id = ? AND side NOT LIKE 'SELL%'
+                   ORDER BY placed_at DESC LIMIT 1""",
+                (cond_id,),
+            ).fetchone()
+            entry_cache[cond_id] = row["price"] if row else 0
+
+        entry_price = entry_cache[cond_id]
+        exit_price = t.get("price") or 0
+        shares = t.get("size") or 0
+
+        if entry_price > 0 and exit_price > 0 and shares > 0:
+            # For YES positions: sold at exit_price, bought at entry_price
+            # For NO positions: same logic — we track cost basis vs sell price
+            pnl_usd = (exit_price - entry_price) * shares
+            cost_basis = entry_price * shares
+            roi_pct = (pnl_usd / cost_basis * 100) if cost_basis > 0 else 0
+
+            t["actual_pnl"] = f"${pnl_usd:+.2f}"
+            t["actual_roi"] = f"{roi_pct:+.1f}%"
+            t["pnl_class"] = "green" if pnl_usd >= 0 else "red"
 
 
 def _get_daily_pnl() -> list[dict]:
