@@ -28,6 +28,14 @@ class RiskManager:
         self._day_start: float = time.time()
         self._positions_by_event: dict[str, float] = {}  # event_slug -> total usd
 
+    def update_limits(self, bankroll: float, daily_loss_limit: float | None = None) -> None:
+        """Sync risk limits with the latest bankroll (called after balance refresh)."""
+        self._bankroll = bankroll
+        if daily_loss_limit is not None:
+            self._daily_loss_limit = daily_loss_limit
+        logger.debug("Risk limits updated: bankroll=$%.2f loss_limit=$%.2f",
+                      self._bankroll, self._daily_loss_limit)
+
     def check_can_trade(self, total_deployed_usd: float) -> tuple[bool, str]:
         """Check portfolio-level constraints before a trade."""
         # Daily loss limit

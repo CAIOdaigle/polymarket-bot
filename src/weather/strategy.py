@@ -294,13 +294,13 @@ class WeatherStrategy:
 
         order = await self.order_mgr.place_order(request)
 
-        # Track position
-        if order.status not in ("failed",):
+        # Track position — use fill_shares (actual order size), not edge.position_size_shares
+        if order.status in ("matched", "filled", "dry_run"):
             pos = self.positions.update_from_fill(
                 condition_id=bucket.condition_id,
                 token_id=bucket.token_id_yes,
                 side="YES",
-                fill_size=edge.position_size_shares,
+                fill_size=fill_shares,
                 fill_price=order.price,
             )
             await self.state_store.save_position(pos)
@@ -321,7 +321,7 @@ class WeatherStrategy:
             token_id=bucket.token_id_yes,
             side="BUY_YES_WEATHER",
             price=order.price,
-            size=edge.position_size_shares,
+            size=fill_shares,
             status=order.status,
             edge=edge.edge,
             kelly_fraction=edge.kelly_fraction,

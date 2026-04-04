@@ -14,6 +14,7 @@ Key design decisions:
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -57,7 +58,10 @@ class WeatherForecast:
 class WeatherForecastClient:
     """Fetches NOAA forecasts and converts to bucket probability distributions."""
 
-    USER_AGENT = "(polymarket-weather-bot, contact@example.com)"
+    USER_AGENT = os.environ.get(
+        "NOAA_USER_AGENT",
+        "(polymarket-weather-bot, contact@example.com)",
+    )
     BASE_URL = "https://api.weather.gov"
 
     def __init__(self, cache_ttl_seconds: float = 3600.0):

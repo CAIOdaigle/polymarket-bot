@@ -385,22 +385,24 @@ class ExitManager:
                             size_to_sell=pos.size,
                         )
                         signals.append(self._apply_liquidity_gate(signal, pos, total_bid_qty))
-                    elif drawdown_pct >= self.cfg.stop_loss_pct:
+                    elif drawdown_pct >= self.cfg.emergency_floor_pct:
+                        # Emergency floor checked first — larger drawdowns get
+                        # the correct reason label even when stop_loss also applies
                         signal = ExitSignal(
                             token_id=pos.token_id,
                             condition_id=pos.condition_id,
-                            reason=ExitReason.STOP_LOSS,
+                            reason=ExitReason.EMERGENCY_FLOOR,
                             current_price=best_bid,
                             entry_price=pos.avg_price,
                             pnl_pct=pnl_pct,
                             size_to_sell=pos.size,
                         )
                         signals.append(self._apply_liquidity_gate(signal, pos, total_bid_qty))
-                    elif drawdown_pct >= self.cfg.emergency_floor_pct:
+                    elif drawdown_pct >= self.cfg.stop_loss_pct:
                         signal = ExitSignal(
                             token_id=pos.token_id,
                             condition_id=pos.condition_id,
-                            reason=ExitReason.EMERGENCY_FLOOR,
+                            reason=ExitReason.STOP_LOSS,
                             current_price=best_bid,
                             entry_price=pos.avg_price,
                             pnl_pct=pnl_pct,

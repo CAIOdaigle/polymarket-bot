@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 # but are driven by the same latent mispricing — also correlated.
 
 SIGNAL_GROUPS: dict[str, list[str]] = {
-    "order_flow":       ["whale_tracker", "orderbook_imbalance", "volume"],
+    "order_flow":       ["whale_tracker", "orderbook_imbalance", "volume_momentum"],
     "price_discovery":  ["lmsr_deviation", "cross_market", "related_market"],
 }
 

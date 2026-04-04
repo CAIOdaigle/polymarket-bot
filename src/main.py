@@ -292,10 +292,6 @@ class TradingBot:
                 )
                 return
 
-            # Set cooldown immediately to prevent rapid-fire duplicates
-            # (other coroutines waiting on the lock will see this timestamp)
-            self._last_trade_time[condition_id] = now
-
             # Require enough independent update events (not just signal types)
             update_count = self._update_event_count.get(condition_id, 0)
             min_updates = self.bayesian.min_signals
@@ -469,11 +465,13 @@ class TradingBot:
 
             order = await self.order_mgr.place_order(request)
 
-            # Record trade time for cooldown
-            self._last_trade_time[condition_id] = time.time()
+            # Only set cooldown and track position on confirmed fills
+            # (pending/open orders haven't filled yet — don't book phantom inventory)
+            if order.status in ("matched", "filled", "live", "dry_run"):
+                self._last_trade_time[condition_id] = time.time()
 
-            # 8. Track position
-            if order.status not in ("failed",):
+            # 8. Track position — only on confirmed fills, not pending/open/failed
+            if order.status in ("matched", "filled", "dry_run"):
                 pos = self.positions.update_from_fill(
                     condition_id=condition_id,
                     token_id=token_id,
@@ -768,6 +766,12 @@ class TradingBot:
                 # Scale max position to ~3.3% of portfolio (min $5)
                 self.config.kelly.max_position_usd = max(5.0, round(portfolio_value * 0.033, 2))
                 self.config.trading.max_position_usd = self.config.kelly.max_position_usd
+
+                # Sync risk manager with updated limits (prevents stale bankroll drift)
+                self.risk_mgr.update_limits(
+                    bankroll=portfolio_value,
+                    daily_loss_limit=self.config.trading.daily_loss_limit_usd,
+                )
 
                 snapshot = {
                     "usdc_balance": round(usdc_balance, 2),

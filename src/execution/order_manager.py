@@ -116,22 +116,24 @@ class OrderManager:
 
             loop = asyncio.get_event_loop()
             try:
-                if request.neg_risk:
-                    resp = await loop.run_in_executor(
-                        None,
-                        lambda: self._client.create_and_post_order(
-                            order_args,
-                            options=CreateOrderOptions(
-                                neg_risk=True,
-                                tick_size=str(request.tick_size),
-                            ),
-                        ),
+                # Split create + post so we can pass order_type to post_order
+                # (create_and_post_order doesn't forward it)
+                options = (
+                    CreateOrderOptions(
+                        neg_risk=True,
+                        tick_size=str(request.tick_size),
                     )
-                else:
-                    resp = await loop.run_in_executor(
-                        None,
-                        lambda: self._client.create_and_post_order(order_args),
-                    )
+                    if request.neg_risk
+                    else None
+                )
+                signed_order = await loop.run_in_executor(
+                    None,
+                    lambda: self._client.create_order(order_args, options),
+                )
+                resp = await loop.run_in_executor(
+                    None,
+                    lambda: self._client.post_order(signed_order, orderType=ot),
+                )
 
                 order_id = resp.get("orderID", resp.get("id", f"UNK-{int(time.time()*1000)}"))
                 status = resp.get("status", "live")
