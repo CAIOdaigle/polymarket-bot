@@ -342,6 +342,15 @@ class ExitManager:
         for pos in open_positions:
             book = books.get(pos.token_id)
             if book is None:
+                logger.warning(
+                    "EXIT BLIND SPOT: position %s (%s, %.2f shares @ %.4f) "
+                    "has no order book — stop-loss CANNOT fire. "
+                    "Token may not be subscribed to WS feed.",
+                    pos.condition_id[:12],
+                    pos.side,
+                    pos.size,
+                    pos.avg_price,
+                )
                 continue
 
             # Update high-water mark

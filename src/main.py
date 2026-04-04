@@ -139,6 +139,10 @@ class TradingBot:
         self._last_trade_time: dict[str, float] = {}
         self._trade_cooldown_seconds = 300.0  # 5 min — prevent hammering same market
 
+        # Post-exit re-entry cooldown (condition_id -> exit timestamp)
+        # Prevents buy→exit→buy churn that bleeds money through spreads
+        self._exit_cooldown: dict[str, float] = {}
+
         # Track update events per market (condition_id -> count of book updates)
         self._update_event_count: dict[str, int] = {}
 
@@ -185,6 +189,20 @@ class TradingBot:
             )
             logger.info("Weather strategy initialized (%d cities enabled)",
                         len(self.config.weather.cities))
+
+        # Ensure restored positions have order books (handles weather tokens
+        # that aren't in the scanner's market list but were persisted from
+        # previous runs). Without this, exit sweep silently skips them.
+        orphan_tokens: list[str] = []
+        for pos in self.positions.get_all_open():
+            if pos.token_id not in self._books:
+                self._books[pos.token_id] = OrderBookState(token_id=pos.token_id)
+                orphan_tokens.append(pos.token_id)
+                logger.info(
+                    "Registered restored position token %s in order books",
+                    pos.token_id[:12],
+                )
+        self._orphan_tokens_to_subscribe = orphan_tokens
 
         logger.info(
             "Bot initialized: %d markets, dry_run=%s, bankroll=$%.2f, weather=%s",
@@ -262,6 +280,18 @@ class TradingBot:
             if now - last_trade < self._trade_cooldown_seconds:
                 return
 
+            # Post-exit re-entry cooldown — prevent buy→exit→buy churn
+            exit_time = self._exit_cooldown.get(condition_id, 0)
+            reentry_cooldown = self.config.trading.reentry_cooldown_seconds
+            if now - exit_time < reentry_cooldown:
+                mins_since = (now - exit_time) / 60
+                mins_needed = reentry_cooldown / 60
+                logger.info(
+                    "Post-exit cooldown: %s exited %.0fm ago, need %.0fm — skipping",
+                    condition_id[:12], mins_since, mins_needed,
+                )
+                return
+
             # Set cooldown immediately to prevent rapid-fire duplicates
             # (other coroutines waiting on the lock will see this timestamp)
             self._last_trade_time[condition_id] = now
@@ -287,6 +317,14 @@ class TradingBot:
             # 1. LMSR analysis
             lmsr_state = self.lmsr.compute_state(bids, asks, mid)
 
+            # 1b. Reject markets where LMSR can't fit the book (b hit max)
+            if lmsr_state.b >= self.config.lmsr.max_b * 0.99:
+                logger.info(
+                    "LMSR hit max_b (%.0f) for %s — book too thin, skipping",
+                    lmsr_state.b, condition_id[:12],
+                )
+                return
+
             # 2. Run signals (pass scanner/books for cross-market signals)
             signals = await self.signal_registry.compute_all(
                 condition_id, market, yes_book, lmsr_state,
@@ -307,6 +345,16 @@ class TradingBot:
                 return
 
             if not self.bayesian.has_sufficient_signals(condition_id):
+                return
+
+            # 4b. Edge sanity cap — edges above threshold are likely model error
+            raw_edge = abs(p_hat - mid)
+            max_edge = self.config.trading.max_plausible_edge
+            if raw_edge > max_edge:
+                logger.warning(
+                    "Edge sanity cap: %s has %.1f%% edge (max %.0f%%) — likely model error, skipping",
+                    condition_id[:12], raw_edge * 100, max_edge * 100,
+                )
                 return
 
             logger.info(
@@ -612,6 +660,8 @@ class TradingBot:
                         self.risk_mgr.record_pnl(pnl)
                         p_hat = self.bayesian.get_estimate(signal.condition_id)
                         await self._log_exit(signal, market, p_hat or 0.0)
+                        # Record exit time for re-entry cooldown (prevents churn)
+                        self._exit_cooldown[signal.condition_id] = time.time()
             except Exception:
                 logger.exception("Exit sweep failed")
 
@@ -752,7 +802,7 @@ class TradingBot:
         while not self._shutdown_event.is_set():
             try:
                 if self._weather_strategy is not None:
-                    results = await self._weather_strategy.evaluate_and_trade()
+                    results, new_token_ids = await self._weather_strategy.evaluate_and_trade()
                     if results:
                         logger.info(
                             "Weather eval: %d trades placed",
@@ -764,6 +814,13 @@ class TradingBot:
                                 r.city, r.date, r.bucket_label,
                                 r.edge, r.position_usd, r.order_status,
                             )
+                    # Subscribe new weather tokens to WS feed for exit monitoring
+                    if new_token_ids:
+                        await self.feed.add_markets(new_token_ids)
+                        logger.info(
+                            "Subscribed %d weather tokens to WS feed for exit monitoring",
+                            len(new_token_ids),
+                        )
             except Exception:
                 logger.exception("Weather evaluation failed")
             await asyncio.sleep(interval)
@@ -774,6 +831,15 @@ class TradingBot:
         await self.initialize()
 
         token_ids = self.scanner.get_all_token_ids()
+
+        # Include restored position tokens (e.g. weather) in initial WS subscription
+        orphan_tokens = getattr(self, "_orphan_tokens_to_subscribe", [])
+        if orphan_tokens:
+            token_ids = list(set(token_ids + orphan_tokens))
+            logger.info(
+                "Including %d restored position tokens in WS subscription",
+                len(orphan_tokens),
+            )
 
         tasks = [
             asyncio.create_task(self.feed.start(token_ids), name="ws_feed"),

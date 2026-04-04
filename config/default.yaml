@@ -10,6 +10,8 @@ trading:
   stale_order_timeout_seconds: 300
   daily_loss_limit_usd: 15.0
   max_event_exposure_pct: 0.30
+  reentry_cooldown_seconds: 3600
+  max_plausible_edge: 0.20
   dry_run: false
 
 lmsr:

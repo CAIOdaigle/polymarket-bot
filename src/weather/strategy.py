@@ -107,16 +107,18 @@ class WeatherStrategy:
         from src.weather.forecast_client import CITY_GRIDS
         return list(CITY_GRIDS.keys())
 
-    async def evaluate_and_trade(self) -> list[WeatherTradeResult]:
+    async def evaluate_and_trade(self) -> tuple[list[WeatherTradeResult], list[str]]:
         """
         Main entry point — scan for weather markets, compute edges, place trades.
 
-        Returns list of trade results (for logging/dashboard).
+        Returns (trade_results, new_token_ids) where new_token_ids are tokens
+        that need WebSocket subscription for exit monitoring.
         """
         if not self.enabled:
-            return []
+            return [], []
 
         results: list[WeatherTradeResult] = []
+        new_token_ids: list[str] = []
 
         # 1. Discover weather markets from the scanner's market list
         all_markets = self.scanner.markets
@@ -124,7 +126,7 @@ class WeatherStrategy:
 
         if not events:
             logger.debug("No weather markets found")
-            return []
+            return [], []
 
         logger.info("Weather strategy: found %d events", len(events))
 
@@ -141,7 +143,7 @@ class WeatherStrategy:
                 "Weather exposure cap: $%.2f deployed (max $%.2f) — skipping all",
                 weather_deployed, max_weather_usd,
             )
-            return []
+            return [], []
 
         # 4. For each viable event, fetch forecast and compute edges
         for event in viable_events:
@@ -197,6 +199,15 @@ class WeatherStrategy:
                     bucket_label=best_edge.bucket_label,
                 )
 
+            # Dedup: skip if we already hold a position on this token
+            token_id = best_edge.bucket.token_id_yes
+            if self.positions.get_position(token_id) is not None:
+                logger.info(
+                    "Weather dedup: already holding position on %s %s %s — skipping",
+                    event.city, event.date, best_edge.bucket_label,
+                )
+                continue
+
             # Place the trade
             result = await self._execute_weather_trade(best_edge, event, forecast)
             if result is not None:
@@ -204,8 +215,11 @@ class WeatherStrategy:
                 self._traded_today.add(city_date_key)
                 weather_deployed += result.position_usd
                 total_deployed += result.position_usd
+                token_id = best_edge.bucket.token_id_yes
+                if token_id not in new_token_ids:
+                    new_token_ids.append(token_id)
 
-        return results
+        return results, new_token_ids
 
     def _filter_events(self, events: list[WeatherEvent]) -> list[WeatherEvent]:
         """Filter events by time horizon and enabled cities."""
@@ -290,6 +304,15 @@ class WeatherStrategy:
                 fill_price=order.price,
             )
             await self.state_store.save_position(pos)
+
+            # Register order book so exit sweep can monitor this position
+            token_id = bucket.token_id_yes
+            if token_id not in self._books:
+                self._books[token_id] = OrderBookState(token_id=token_id)
+                logger.info(
+                    "Registered weather token %s in order books for exit monitoring",
+                    token_id[:12],
+                )
 
         # Log trade to SQLite
         await self.state_store.log_trade(

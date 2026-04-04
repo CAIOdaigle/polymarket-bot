@@ -53,6 +53,8 @@ class TradingConfig(BaseSettings):
     stale_order_timeout_seconds: int = 300
     daily_loss_limit_usd: float = 100.0
     max_event_exposure_pct: float = 0.30  # max 30% of bankroll per event cluster
+    reentry_cooldown_seconds: float = 3600.0  # 60 min cooldown after exiting before re-entering same market
+    max_plausible_edge: float = 0.20  # edges above this are likely model error, not alpha
     dry_run: bool = True
 
     model_config = {"extra": "ignore"}
