@@ -229,9 +229,12 @@ class OrderManager:
         loop = asyncio.get_event_loop()
         try:
             await self._rate_limiter.public.acquire()
+            from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
             bal = await loop.run_in_executor(
                 None,
-                lambda: self._client.get_balance_allowance(asset_type=0),  # USDC
+                lambda: self._client.get_balance_allowance(
+                    BalanceAllowanceParams(asset_type=AssetType.COLLATERAL),
+                ),
             )
             return float(bal.get("balance", 0))
         except Exception:
