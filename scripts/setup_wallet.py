@@ -53,8 +53,10 @@ def main():
         f.write(f"SLACK_WEBHOOK_URL={slack}\n")
         f.write("BOT_ENV=development\n")
 
+    os.chmod(env_path, 0o600)
+
     print()
-    print(f"Configuration written to {env_path}")
+    print(f"Configuration written to {env_path} (permissions: 600)")
     print()
     print("STEP 4: Verify API credentials")
     print("-" * 40)

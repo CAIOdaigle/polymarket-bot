@@ -1,9 +1,16 @@
 #!/bin/sh
-# Start dashboard in background, then run the bot in foreground
+set -e
+
+# Start dashboard in background
 python -m src.dashboard.app &
 DASHBOARD_PID=$!
 
-# If bot exits, kill dashboard too
-trap "kill $DASHBOARD_PID 2>/dev/null" EXIT
+# Forward signals to both processes for clean shutdown
+cleanup() {
+    kill $DASHBOARD_PID 2>/dev/null
+    wait $DASHBOARD_PID 2>/dev/null
+}
+trap cleanup INT TERM EXIT
 
-python -m src.main
+# Run bot in foreground (exec replaces shell so signals reach Python directly)
+exec python -m src.main
