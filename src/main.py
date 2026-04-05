@@ -465,9 +465,9 @@ class TradingBot:
 
             order = await self.order_mgr.place_order(request)
 
-            # Only set cooldown and track position on confirmed fills
-            # (pending/open orders haven't filled yet — don't book phantom inventory)
-            if order.status in ("matched", "filled", "live", "dry_run"):
+            # Only set cooldown on confirmed fills — "live" means accepted but
+            # not yet filled, so it should NOT suppress future entries
+            if order.status in ("matched", "filled", "dry_run"):
                 self._last_trade_time[condition_id] = time.time()
 
             # 8. Track position — only on confirmed fills, not pending/open/failed

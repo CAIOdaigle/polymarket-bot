@@ -12,7 +12,7 @@ trading:
   max_event_exposure_pct: 0.30
   reentry_cooldown_seconds: 3600
   max_plausible_edge: 0.20
-  dry_run: false
+  dry_run: true
 
 lmsr:
   default_b: 100.0

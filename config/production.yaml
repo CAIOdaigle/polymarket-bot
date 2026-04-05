@@ -1,0 +1,3 @@
+# Production overrides — merged on top of default.yaml when BOT_ENV=production
+trading:
+  dry_run: false
