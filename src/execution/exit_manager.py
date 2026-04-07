@@ -356,6 +356,56 @@ class ExitManager:
             # Update high-water mark
             best_bid = book.best_bid
 
+            if best_bid is None:
+                # No bids — use best ask as a proxy price (if someone is selling
+                # at X, the position is worth at most X). If even ask is missing,
+                # treat as zero after a timeout.
+                best_ask = book.best_ask
+                hold_seconds = time.time() - pos.entry_time
+                no_bid_timeout = self.cfg.max_hold_hours * 1800  # half max hold
+
+                if best_ask is not None:
+                    # Estimate drawdown from ask price (conservative — real exit
+                    # would be worse since there are no bids to sell into)
+                    proxy_price = best_ask
+                    drawdown_pct = (pos.avg_price - proxy_price) / pos.avg_price if pos.avg_price > 0 else 0.0
+                    pnl_pct = (proxy_price - pos.avg_price) / pos.avg_price if pos.avg_price > 0 else 0.0
+
+                    if drawdown_pct >= self.cfg.stop_loss_pct:
+                        logger.warning(
+                            "NO-BID EXIT: %s has no bids, ask=%.4f, drawdown=%.1f%% — triggering exit at ask",
+                            pos.condition_id[:12], proxy_price, drawdown_pct * 100,
+                        )
+                        signal = ExitSignal(
+                            token_id=pos.token_id,
+                            condition_id=pos.condition_id,
+                            reason=ExitReason.STOP_LOSS,
+                            current_price=proxy_price,
+                            entry_price=pos.avg_price,
+                            pnl_pct=pnl_pct,
+                            size_to_sell=pos.size,
+                        )
+                        signals.append(signal)
+                        continue
+
+                if hold_seconds >= no_bid_timeout:
+                    logger.warning(
+                        "NO-BID TIMEOUT: %s held %.1fh with no bids — force exit",
+                        pos.condition_id[:12], hold_seconds / 3600,
+                    )
+                    signal = ExitSignal(
+                        token_id=pos.token_id,
+                        condition_id=pos.condition_id,
+                        reason=ExitReason.TIME_BACKSTOP,
+                        current_price=best_ask or 0.001,
+                        entry_price=pos.avg_price,
+                        pnl_pct=-1.0,
+                        size_to_sell=pos.size,
+                    )
+                    signals.append(signal)
+
+                continue
+
             if best_bid is not None:
                 pos.update_high_water_mark(best_bid)
 
