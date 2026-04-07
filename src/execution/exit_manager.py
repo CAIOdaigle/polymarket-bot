@@ -213,8 +213,14 @@ class ExitManager:
     ) -> ExitSignal:
         """Check if there's enough liquidity to exit cleanly.
 
-        If book is too thin, defer the exit to avoid slippage.
+        If book is too thin, defer the exit to avoid slippage — UNLESS
+        the signal is a stop-loss or emergency floor, which must execute
+        immediately regardless of liquidity (that's the whole point).
         """
+        # Never defer stop-loss or emergency exits — get out NOW
+        if signal.reason in (ExitReason.STOP_LOSS, ExitReason.EMERGENCY_FLOOR):
+            return signal
+
         required_qty = pos.size * self.cfg.min_exit_liquidity_pct
         if total_bid_qty < required_qty:
             logger.warning(
