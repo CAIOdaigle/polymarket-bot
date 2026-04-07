@@ -6,6 +6,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from typing import Optional
 
 from py_clob_client.client import ClobClient
@@ -238,10 +239,57 @@ class OrderManager:
                     BalanceAllowanceParams(asset_type=AssetType.COLLATERAL),
                 ),
             )
-            return float(bal.get("balance", 0))
+            return self._normalize_usdc_balance(bal)
         except Exception:
             logger.exception("Failed to fetch USDC balance")
             return 0.0
+
+    @staticmethod
+    def _normalize_usdc_balance(balance_payload: dict) -> float:
+        """Normalize balance payload into USDC units.
+
+        The Polymarket CLOB balance-allowance endpoint returns USDC in base
+        units (6 decimals on Polygon). Always divide by 1e6.
+        """
+        raw = balance_payload.get("balance", 0)
+        raw_str = str(raw).strip()
+        if not raw_str:
+            return 0.0
+
+        try:
+            amount = Decimal(raw_str)
+        except (InvalidOperation, TypeError, ValueError):
+            return float(raw or 0.0)
+
+        # USDC on Polygon always has 6 decimals — the CLOB API returns base units
+        USDC_DECIMALS = Decimal("1000000")
+
+        # If a decimals field is present, use it; otherwise default to 6
+        decimals = None
+        for key in ("decimals", "assetDecimals", "tokenDecimals"):
+            if key in balance_payload:
+                try:
+                    decimals = int(balance_payload[key])
+                    break
+                except (TypeError, ValueError):
+                    continue
+
+        if decimals is not None:
+            return float(amount / (Decimal(10) ** decimals))
+
+        # No decimals field — normalize from base units (6 decimals)
+        # Values that look already-normalized (e.g. "365.71") would be < 1000
+        # after division, which is fine. Values in base units like "365706340"
+        # become ~365.71.
+        if amount > Decimal("1000"):
+            normalized = amount / USDC_DECIMALS
+            logger.info(
+                "Balance %s -> $%.2f USDC (divided by 1e6)",
+                raw_str, float(normalized),
+            )
+            return float(normalized)
+
+        return float(amount)
 
     @property
     def open_orders(self) -> dict[str, OrderRecord]:
