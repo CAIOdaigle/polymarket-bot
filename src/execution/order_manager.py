@@ -108,9 +108,12 @@ class OrderManager:
                 10,
             )
 
+            # CLOB API requires max 2 decimal places for maker amount (size)
+            size = round(request.size, 2)
+
             order_args = OrderArgs(
                 price=price,
-                size=request.size,
+                size=size,
                 side=request.side,
                 token_id=request.token_id,
             )

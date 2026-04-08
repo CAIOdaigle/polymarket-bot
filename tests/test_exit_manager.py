@@ -550,3 +550,84 @@ class TestNoBidExitHandling:
 
         signals = mgr.check_all_positions(books, MagicMock(get_estimate=lambda x: None), MagicMock())
         assert len(signals) == 0
+
+
+# ---------------------------------------------------------------------------
+# 11. Trailing stop-loss
+# ---------------------------------------------------------------------------
+
+class TestTrailingStop:
+
+    def test_triggers_when_price_drops_from_hwm(self):
+        """Position ran from 0.50 to 0.80 then dropped to 0.70 — 12.5% from HWM."""
+        mgr = make_manager(trailing_stop_pct=0.10)
+        pos = FakePosition(avg_price=0.50, size=100, high_water_mark=0.80)
+        # best_bid=0.70 → drop from HWM = (0.80-0.70)/0.80 = 12.5%
+        book = FakeBook(bids=[(0.70, 200)])
+        signal = mgr.evaluate_position(pos, book, p_hat=0.75, confidence=0.80, market=None)
+        assert signal is not None
+        assert signal.reason == ExitReason.TRAILING_STOP
+        assert signal.pnl_pct > 0  # still profitable overall
+
+    def test_does_not_trigger_when_hwm_equals_entry(self):
+        """No trailing stop if position never gained (HWM == entry price)."""
+        mgr = make_manager(trailing_stop_pct=0.10)
+        pos = FakePosition(avg_price=0.50, size=100, high_water_mark=0.50)
+        # Price dropped to 0.44 → 12% from HWM, but HWM == entry → trailing stop inactive
+        book = FakeBook(bids=[(0.44, 200)])
+        signal = mgr.evaluate_position(pos, book, p_hat=0.42, confidence=0.80, market=None)
+        # Should NOT be trailing stop (may be stop-loss or edge_floor)
+        if signal is not None:
+            assert signal.reason != ExitReason.TRAILING_STOP
+
+    def test_does_not_trigger_small_pullback(self):
+        """5% pullback from HWM should not trigger 10% trailing stop."""
+        mgr = make_manager(trailing_stop_pct=0.10)
+        pos = FakePosition(avg_price=0.50, size=100, high_water_mark=0.80)
+        # best_bid=0.76 → drop = (0.80-0.76)/0.80 = 5%
+        book = FakeBook(bids=[(0.76, 200)])
+        signal = mgr.evaluate_position(pos, book, p_hat=0.78, confidence=0.80, market=None)
+        assert signal is None or signal.reason != ExitReason.TRAILING_STOP
+
+    def test_trailing_stop_bypasses_liquidity_gate(self):
+        """Trailing stop must not be deferred for thin books."""
+        mgr = make_manager(trailing_stop_pct=0.10, min_exit_liquidity_pct=0.80)
+        pos = FakePosition(avg_price=0.50, size=100, high_water_mark=0.80)
+        # Only 5 shares on book, but trailing stop should still fire
+        book = FakeBook(bids=[(0.70, 5)])
+        signal = mgr.evaluate_position(pos, book, p_hat=0.75, confidence=0.80, market=None)
+        assert signal is not None
+        assert signal.reason == ExitReason.TRAILING_STOP
+        assert signal.deferred is False
+
+    def test_fixed_stop_takes_priority_over_trailing(self):
+        """If both fixed stop-loss and trailing stop would fire, fixed stop wins
+        (checked first in priority order)."""
+        mgr = make_manager(stop_loss_pct=0.15, trailing_stop_pct=0.10)
+        pos = FakePosition(avg_price=0.50, size=100, high_water_mark=0.60)
+        # best_bid=0.40 → fixed drawdown = 20% (fires), HWM drop = 33% (would also fire)
+        book = FakeBook(bids=[(0.40, 200)])
+        signal = mgr.evaluate_position(pos, book, p_hat=0.38, confidence=0.80, market=None)
+        assert signal is not None
+        assert signal.reason == ExitReason.STOP_LOSS
+
+    def test_trailing_stop_in_sweep_without_bayesian(self):
+        """Trailing stop should fire in check_all_positions even without Bayesian model."""
+        mgr = make_manager(trailing_stop_pct=0.10)
+
+        pos = FakePosition(
+            avg_price=0.10, size=100, token_id="tok_weather",
+            high_water_mark=0.50,  # ran up 5x
+        )
+        mgr.positions.get_all_open.return_value = [pos]
+
+        # best_bid=0.40 → drop from HWM = (0.50-0.40)/0.50 = 20%
+        book = FakeBook(bids=[(0.40, 200)])
+        books = {"tok_weather": book}
+
+        bayesian = MagicMock()
+        bayesian.get_estimate.return_value = None  # no model data
+
+        signals = mgr.check_all_positions(books, bayesian, MagicMock())
+        assert len(signals) == 1
+        assert signals[0].reason == ExitReason.TRAILING_STOP

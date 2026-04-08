@@ -31,6 +31,7 @@ class ExitReason(str, Enum):
     TIME_BACKSTOP = "time_backstop"
     EMERGENCY_FLOOR = "emergency_floor"
     STOP_LOSS = "stop_loss"
+    TRAILING_STOP = "trailing_stop"
     TAKE_PROFIT = "take_profit"
     LIQUIDITY_DEFER = "liquidity_defer"
 
@@ -128,6 +129,33 @@ class ExitManager:
             )
             return self._apply_liquidity_gate(signal, pos, total_bid_qty)
 
+        # --- Priority 2a: Trailing stop (from high-water mark) ---
+        # Only activates after position has gained value (HWM > entry price)
+        if pos.high_water_mark > pos.avg_price and pos.high_water_mark > 0:
+            drop_from_hwm = (pos.high_water_mark - best_bid) / pos.high_water_mark
+            if drop_from_hwm >= self.cfg.trailing_stop_pct:
+                signal = ExitSignal(
+                    token_id=pos.token_id,
+                    condition_id=pos.condition_id,
+                    reason=ExitReason.TRAILING_STOP,
+                    current_price=best_bid,
+                    entry_price=pos.avg_price,
+                    pnl_pct=pnl_pct,
+                    size_to_sell=pos.size,
+                    edge_at_exit=edge,
+                    confidence=confidence,
+                    metadata={
+                        "high_water_mark": pos.high_water_mark,
+                        "drop_from_hwm_pct": round(drop_from_hwm * 100, 1),
+                    },
+                )
+                logger.info(
+                    "TRAILING STOP: %s dropped %.1f%% from HWM %.4f (now %.4f, entry %.4f)",
+                    pos.token_id[:8], drop_from_hwm * 100,
+                    pos.high_water_mark, best_bid, pos.avg_price,
+                )
+                return self._apply_liquidity_gate(signal, pos, total_bid_qty)
+
         # --- Priority 2b: Take-profit (partial sell to lock in gains) ---
         if (
             not pos.partial_profit_taken
@@ -215,8 +243,8 @@ class ExitManager:
         the signal is a stop-loss or emergency floor, which must execute
         immediately regardless of liquidity (that's the whole point).
         """
-        # Never defer stop-loss or emergency exits — get out NOW
-        if signal.reason in (ExitReason.STOP_LOSS, ExitReason.EMERGENCY_FLOOR):
+        # Never defer stop-loss, trailing stop, or emergency exits — get out NOW
+        if signal.reason in (ExitReason.STOP_LOSS, ExitReason.TRAILING_STOP, ExitReason.EMERGENCY_FLOOR):
             return signal
 
         required_qty = pos.size * self.cfg.min_exit_liquidity_pct
@@ -466,6 +494,27 @@ class ExitManager:
                             size_to_sell=pos.size,
                         )
                         signals.append(self._apply_liquidity_gate(signal, pos, total_bid_qty))
+                    elif pos.high_water_mark > pos.avg_price and pos.high_water_mark > 0:
+                        drop_from_hwm = (pos.high_water_mark - best_bid) / pos.high_water_mark
+                        if drop_from_hwm >= self.cfg.trailing_stop_pct:
+                            logger.info(
+                                "TRAILING STOP (no model): %s dropped %.1f%% from HWM %.4f",
+                                pos.token_id[:8], drop_from_hwm * 100, pos.high_water_mark,
+                            )
+                            signal = ExitSignal(
+                                token_id=pos.token_id,
+                                condition_id=pos.condition_id,
+                                reason=ExitReason.TRAILING_STOP,
+                                current_price=best_bid,
+                                entry_price=pos.avg_price,
+                                pnl_pct=pnl_pct,
+                                size_to_sell=pos.size,
+                                metadata={
+                                    "high_water_mark": pos.high_water_mark,
+                                    "drop_from_hwm_pct": round(drop_from_hwm * 100, 1),
+                                },
+                            )
+                            signals.append(self._apply_liquidity_gate(signal, pos, total_bid_qty))
                 continue
 
             # Get LMSR confidence if available

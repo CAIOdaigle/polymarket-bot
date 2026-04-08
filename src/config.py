@@ -163,7 +163,8 @@ class SignalConfig(BaseSettings):
 
 class ExitConfig(BaseSettings):
     enabled: bool = True
-    stop_loss_pct: float = 0.15  # 15% price-based stop-loss
+    stop_loss_pct: float = 0.15  # 15% price-based stop-loss (from entry)
+    trailing_stop_pct: float = 0.10  # 10% trailing stop (from high-water mark)
     take_profit_pct: float = 0.15  # +15% triggers partial take-profit
     take_profit_sell_fraction: float = 0.50  # sell 50% of position
     edge_floor_threshold: float = -0.05
