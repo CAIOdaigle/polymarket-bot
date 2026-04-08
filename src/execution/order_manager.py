@@ -108,7 +108,7 @@ class OrderManager:
                 10,
             )
 
-            # CLOB API requires max 2 decimal places for maker amount (size)
+            # Round size to 2 decimal places (CLOB max precision)
             size = round(request.size, 2)
 
             order_args = OrderArgs(
@@ -120,15 +120,11 @@ class OrderManager:
 
             loop = asyncio.get_event_loop()
             try:
-                # Split create + post so we can pass order_type to post_order
-                # (create_and_post_order doesn't forward it)
-                options = (
-                    CreateOrderOptions(
-                        neg_risk=True,
-                        tick_size=str(request.tick_size),
-                    )
-                    if request.neg_risk
-                    else None
+                # Always pass CreateOrderOptions with tick_size so the library
+                # applies correct rounding for maker/taker amounts.
+                options = CreateOrderOptions(
+                    neg_risk=request.neg_risk,
+                    tick_size=str(request.tick_size),
                 )
                 signed_order = await loop.run_in_executor(
                     None,
