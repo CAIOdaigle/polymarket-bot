@@ -291,6 +291,43 @@ class OrderManager:
 
         return float(amount)
 
+    async def poll_open_orders(self) -> list[OrderRecord]:
+        """Poll the CLOB API for status of all 'live' orders.
+
+        Returns list of orders whose status changed (e.g. filled).
+        """
+        if self._client is None or self._dry_run:
+            return []
+
+        changed: list[OrderRecord] = []
+        loop = asyncio.get_event_loop()
+
+        for oid, rec in list(self._orders.items()):
+            if rec.status not in ("live", "open", "pending"):
+                continue
+            try:
+                await self._rate_limiter.orders.acquire()
+                resp = await loop.run_in_executor(
+                    None, self._client.get_order, oid
+                )
+                new_status = resp.get("status", rec.status)
+                size_matched = float(resp.get("size_matched", 0) or 0)
+
+                if new_status != rec.status or size_matched != rec.filled_size:
+                    old_status = rec.status
+                    rec.status = new_status
+                    rec.filled_size = size_matched
+                    rec.updated_at = time.time()
+                    changed.append(rec)
+                    logger.info(
+                        "Order %s status: %s -> %s (filled=%.2f/%.2f)",
+                        oid, old_status, new_status, size_matched, rec.size,
+                    )
+            except Exception:
+                logger.debug("Failed to poll order %s", oid, exc_info=True)
+
+        return changed
+
     @property
     def open_orders(self) -> dict[str, OrderRecord]:
         return {

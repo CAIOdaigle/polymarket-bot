@@ -33,6 +33,7 @@ class MarketScanner:
         all_markets: list[Market] = []
         offset = 0
         limit = 100
+        scan_complete = True
 
         while True:
             url = f"{self._gamma_host}/markets"
@@ -45,11 +46,16 @@ class MarketScanner:
             try:
                 async with session.get(url, params=params) as resp:
                     if resp.status != 200:
-                        logger.error("Gamma API returned %d", resp.status)
+                        logger.warning(
+                            "Gamma API returned %d at offset %d — partial scan",
+                            resp.status, offset,
+                        )
+                        scan_complete = False
                         break
                     data = await resp.json()
             except Exception:
-                logger.exception("Failed to fetch markets at offset %d", offset)
+                logger.exception("Failed to fetch markets at offset %d — partial scan", offset)
+                scan_complete = False
                 break
 
             if not data:
@@ -64,9 +70,18 @@ class MarketScanner:
                 break
             offset += limit
 
+        if not scan_complete and not all_markets:
+            # Total failure — keep existing markets rather than wiping them
+            logger.warning("Scan failed completely, keeping %d existing markets", len(self._markets))
+            return self._markets
+
         filtered = self._filters.apply(all_markets)
         self._markets = {m.condition_id: m for m in filtered}
-        logger.info("Scanned %d total, tracking %d markets", len(all_markets), len(self._markets))
+        logger.info(
+            "Scanned %d total, tracking %d markets%s",
+            len(all_markets), len(self._markets),
+            "" if scan_complete else " (partial scan)",
+        )
         return self._markets
 
     def get_market(self, condition_id: str) -> Optional[Market]:

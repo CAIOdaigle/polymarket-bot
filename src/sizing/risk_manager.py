@@ -36,11 +36,14 @@ class RiskManager:
         logger.debug("Risk limits updated: bankroll=$%.2f loss_limit=$%.2f",
                       self._bankroll, self._daily_loss_limit)
 
-    def check_can_trade(self, total_deployed_usd: float) -> tuple[bool, str]:
+    def check_can_trade(
+        self, total_deployed_usd: float, unrealized_pnl: float = 0.0
+    ) -> tuple[bool, str]:
         """Check portfolio-level constraints before a trade."""
-        # Daily loss limit
-        if self._daily_pnl < -self._daily_loss_limit:
-            return False, f"Daily loss limit hit: ${self._daily_pnl:.2f}"
+        # Daily loss limit (realized + unrealized)
+        total_pnl = self._daily_pnl + unrealized_pnl
+        if total_pnl < -self._daily_loss_limit:
+            return False, f"Daily loss limit hit: ${total_pnl:.2f} (realized=${self._daily_pnl:.2f} unrealized=${unrealized_pnl:.2f})"
 
         # Portfolio exposure limit
         if total_deployed_usd >= self._bankroll * self._max_exposure:

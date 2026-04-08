@@ -290,11 +290,14 @@ class ExitManager:
         try:
             from src.execution.order_manager import TradeRequest
 
+            # CLOB API requires price in [0.01, 0.99]
+            sell_price = max(signal.current_price, 0.01)
+
             request = TradeRequest(
                 condition_id=signal.condition_id,
                 token_id=signal.token_id,
                 side="SELL",
-                price=signal.current_price,
+                price=sell_price,
                 size=signal.size_to_sell,
                 order_type="GTC",
                 edge=signal.edge_at_exit,
@@ -401,7 +404,7 @@ class ExitManager:
                         token_id=pos.token_id,
                         condition_id=pos.condition_id,
                         reason=ExitReason.TIME_BACKSTOP,
-                        current_price=best_ask or 0.001,
+                        current_price=best_ask or 0.01,
                         entry_price=pos.avg_price,
                         pnl_pct=-1.0,
                         size_to_sell=pos.size,

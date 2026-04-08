@@ -363,9 +363,14 @@ class TradingBot:
                 self._update_event_count.get(condition_id, 0),
             )
 
-            # 5. Risk check
+            # 5. Risk check (include unrealized losses)
             total_deployed = self.positions.get_total_deployed()
-            can_trade, reason = self.risk_mgr.check_can_trade(total_deployed)
+            unrealized_pnl = 0.0
+            for opos in self.positions.get_all_open():
+                obook = self._books.get(opos.token_id)
+                if obook and obook.best_bid is not None:
+                    unrealized_pnl += (obook.best_bid - opos.avg_price) * opos.size
+            can_trade, reason = self.risk_mgr.check_can_trade(total_deployed, unrealized_pnl)
             if not can_trade:
                 return
 
@@ -830,6 +835,32 @@ class TradingBot:
                 logger.exception("Weather evaluation failed")
             await asyncio.sleep(interval)
 
+    async def _periodic_order_poll(self) -> None:
+        """Poll live orders for fills and update position tracker."""
+        while not self._shutdown_event.is_set():
+            await asyncio.sleep(60)
+            try:
+                changed = await self.order_mgr.poll_open_orders()
+                for rec in changed:
+                    if rec.status in ("matched", "filled") and rec.filled_size > 0:
+                        # Order filled — track position if not already tracked
+                        existing = self.positions.get_position(rec.token_id)
+                        if existing is None:
+                            pos = self.positions.update_from_fill(
+                                condition_id=rec.condition_id,
+                                token_id=rec.token_id,
+                                side=rec.side.replace("BUY", "YES").replace("SELL", "NO"),
+                                fill_size=rec.filled_size,
+                                fill_price=rec.price,
+                            )
+                            await self.state_store.save_position(pos)
+                            logger.info(
+                                "Late fill tracked: %s %s %.2f @ %.4f",
+                                rec.order_id, rec.side, rec.filled_size, rec.price,
+                            )
+            except Exception:
+                logger.exception("Order poll failed")
+
     # ---- Lifecycle ----
 
     async def run(self) -> None:
@@ -854,6 +885,7 @@ class TradingBot:
             asyncio.create_task(self._periodic_daily_summary(), name="daily"),
             asyncio.create_task(self._periodic_exit_sweep(), name="exit_sweep"),
             asyncio.create_task(self._periodic_balance_refresh(), name="balance"),
+            asyncio.create_task(self._periodic_order_poll(), name="order_poll"),
         ]
 
         if self._weather_enabled:
