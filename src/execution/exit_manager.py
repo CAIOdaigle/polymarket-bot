@@ -92,12 +92,10 @@ class ExitManager:
         # PnL calculation
         pnl_pct = (best_bid - pos.avg_price) / pos.avg_price if pos.avg_price > 0 else 0.0
 
-        # For YES positions: edge = p_hat - best_bid
-        # For NO positions: p_hat should already be the NO probability
-        if pos.side == "YES":
-            edge = p_hat - best_bid
-        else:
-            edge = p_hat - best_bid
+        # Edge = model probability - market price
+        # Caller is responsible for passing the correct p_hat
+        # (YES probability for YES positions, NO probability for NO positions)
+        edge = p_hat - best_bid
 
         # --- Priority 1: Emergency floor (model/data failure guard) ---
         drawdown_pct = (pos.avg_price - best_bid) / pos.avg_price if pos.avg_price > 0 else 0.0
@@ -474,7 +472,10 @@ class ExitManager:
 
             market = scanner.get_market(pos.condition_id) if scanner else None
 
-            signal = self.evaluate_position(pos, book, p_hat, confidence, market)
+            # For NO positions, convert YES probability to NO probability
+            # so edge calculation inside evaluate_position is correct.
+            pos_p_hat = p_hat if pos.side == "YES" else (1.0 - p_hat)
+            signal = self.evaluate_position(pos, book, pos_p_hat, confidence, market)
             if signal is not None:
                 signals.append(signal)
 

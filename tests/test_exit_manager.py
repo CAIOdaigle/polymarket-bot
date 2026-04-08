@@ -56,13 +56,19 @@ class FakePosition:
 class FakeBook:
     """Order book stub matching OrderBookState API."""
     _bids: list = field(default_factory=list)  # [(price, qty), ...]
+    _best_ask: Optional[float] = None
 
-    def __init__(self, bids=None):
+    def __init__(self, bids=None, best_ask=None):
         self._bids = bids or []
+        self._best_ask = best_ask
 
     @property
     def best_bid(self) -> Optional[float]:
         return self._bids[0][0] if self._bids else None
+
+    @property
+    def best_ask(self) -> Optional[float]:
+        return self._best_ask
 
     def bids_as_tuples(self) -> list:
         return list(self._bids)
@@ -399,3 +405,148 @@ class TestTakeProfit:
         assert signal is not None
         assert signal.reason == ExitReason.STOP_LOSS
         assert signal.size_to_sell == 100.0  # full position, not partial
+
+
+# ---------------------------------------------------------------------------
+# 8. NO position edge in check_all_positions (Phase 1A fix)
+# ---------------------------------------------------------------------------
+
+class TestNoPositionEdgeInSweep:
+
+    def test_no_position_gets_correct_edge_in_sweep(self):
+        """check_all_positions should convert p_hat for NO positions so edge
+        is computed correctly. Bug: raw YES p_hat=0.30 with NO best_bid=0.65
+        would give edge=-0.35 (premature exit). Correct: (1-0.30)-0.65=+0.05 (hold)."""
+        mgr = make_manager(edge_floor_threshold=-0.05, edge_floor_confidence_min=0.60)
+
+        pos = FakePosition(
+            avg_price=0.70, size=100, side="NO", token_id="tok_no_gta",
+            condition_id="cond_gta",
+        )
+        mgr.positions.get_all_open.return_value = [pos]
+
+        book = FakeBook(bids=[(0.65, 200)])
+        books = {"tok_no_gta": book}
+
+        bayesian = MagicMock()
+        # Bayesian returns YES probability = 0.30 (NO prob = 0.70)
+        bayesian.get_estimate.return_value = 0.30
+        bayesian.get_confidence.return_value = 0.75
+
+        scanner = MagicMock()
+        scanner.get_market.return_value = None
+
+        signals = mgr.check_all_positions(books, bayesian, scanner)
+        # Edge = (1 - 0.30) - 0.65 = +0.05, above -0.05 floor → should NOT exit
+        assert len(signals) == 0
+
+    def test_no_position_exits_when_edge_truly_negative(self):
+        """NO position should exit when converted edge is truly below floor."""
+        mgr = make_manager(edge_floor_threshold=-0.05, edge_floor_confidence_min=0.60)
+
+        pos = FakePosition(
+            avg_price=0.70, size=100, side="NO", token_id="tok_no_bad",
+            condition_id="cond_bad",
+        )
+        mgr.positions.get_all_open.return_value = [pos]
+
+        book = FakeBook(bids=[(0.65, 200)])
+        books = {"tok_no_bad": book}
+
+        bayesian = MagicMock()
+        # YES p_hat=0.45 → NO p_hat=0.55 → edge = 0.55 - 0.65 = -0.10
+        bayesian.get_estimate.return_value = 0.45
+        bayesian.get_confidence.return_value = 0.75
+
+        scanner = MagicMock()
+        scanner.get_market.return_value = None
+
+        signals = mgr.check_all_positions(books, bayesian, scanner)
+        assert len(signals) == 1
+        assert signals[0].reason == ExitReason.EDGE_FLOOR
+
+
+# ---------------------------------------------------------------------------
+# 9. Stop-loss and emergency bypass liquidity gate
+# ---------------------------------------------------------------------------
+
+class TestStopLossBypassesLiquidityGate:
+
+    def test_stop_loss_not_deferred_on_thin_book(self):
+        """Stop-loss must execute even on thin books — never deferred."""
+        mgr = make_manager(stop_loss_pct=0.15, min_exit_liquidity_pct=0.80)
+        pos = FakePosition(avg_price=0.50, size=100)
+        # Only 5 shares on the book, but drawdown > 15% → must still fire
+        book = FakeBook(bids=[(0.42, 5)])
+        signal = mgr.evaluate_position(pos, book, p_hat=0.40, confidence=0.80, market=None)
+        assert signal is not None
+        assert signal.reason == ExitReason.STOP_LOSS
+        assert signal.deferred is False
+
+    def test_emergency_floor_not_deferred_on_thin_book(self):
+        """Emergency floor must execute even on thin books."""
+        mgr = make_manager(emergency_floor_pct=0.25, min_exit_liquidity_pct=0.80)
+        pos = FakePosition(avg_price=0.60, size=100)
+        book = FakeBook(bids=[(0.44, 5)])  # 26.7% drawdown, only 5 shares
+        signal = mgr.evaluate_position(pos, book, p_hat=0.46, confidence=0.40, market=None)
+        assert signal is not None
+        assert signal.reason == ExitReason.EMERGENCY_FLOOR
+        assert signal.deferred is False
+
+
+# ---------------------------------------------------------------------------
+# 10. No-bid exit handling in check_all_positions
+# ---------------------------------------------------------------------------
+
+class TestNoBidExitHandling:
+
+    def test_no_bid_with_ask_triggers_stop_loss(self):
+        """When no bids exist but ask shows large drawdown, exit via stop-loss."""
+        mgr = make_manager(stop_loss_pct=0.15)
+
+        pos = FakePosition(avg_price=0.50, size=100, token_id="tok_nobid")
+        mgr.positions.get_all_open.return_value = [pos]
+
+        # No bids, but ask at 0.30 → drawdown = (0.50-0.30)/0.50 = 40%
+        book = FakeBook(bids=[], best_ask=0.30)
+        books = {"tok_nobid": book}
+
+        signals = mgr.check_all_positions(books, MagicMock(get_estimate=lambda x: None), MagicMock())
+        assert len(signals) == 1
+        assert signals[0].reason == ExitReason.STOP_LOSS
+
+    def test_no_bid_timeout_triggers_time_backstop(self):
+        """Position with no bids held past timeout should force exit."""
+        mgr = make_manager(max_hold_hours=72)
+
+        pos = FakePosition(
+            avg_price=0.50, size=100, token_id="tok_nobid2",
+            # Held for 37+ hours (half of 72h max hold)
+            entry_time=time.time() - (37 * 3600),
+        )
+        mgr.positions.get_all_open.return_value = [pos]
+
+        # No bids, no asks
+        book = FakeBook(bids=[], best_ask=None)
+        books = {"tok_nobid2": book}
+
+        signals = mgr.check_all_positions(books, MagicMock(get_estimate=lambda x: None), MagicMock())
+        assert len(signals) == 1
+        assert signals[0].reason == ExitReason.TIME_BACKSTOP
+
+    def test_no_bid_within_timeout_no_signal(self):
+        """No bids but position is young and ask doesn't show stop-loss → no exit."""
+        mgr = make_manager(stop_loss_pct=0.15, max_hold_hours=72)
+
+        pos = FakePosition(
+            avg_price=0.50, size=100, token_id="tok_nobid3",
+            entry_time=time.time() - 3600,  # 1 hour ago
+        )
+        mgr.positions.get_all_open.return_value = [pos]
+
+        # No bids, ask at 0.48 → drawdown only 4%, below stop-loss
+        book = FakeBook(bids=[], best_ask=0.48)
+        books = {"tok_nobid3": book}
+
+        signals = mgr.check_all_positions(books, MagicMock(get_estimate=lambda x: None), MagicMock())
+        assert len(signals) == 0

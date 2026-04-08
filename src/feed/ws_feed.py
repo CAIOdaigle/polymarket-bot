@@ -101,7 +101,15 @@ class MarketFeed:
                 await self._ws.send(msg)
                 self._subscribed_ids.update(batch)
         except Exception:
-            pass
+            logger.exception("Failed to subscribe to new markets: %s", new_token_ids[:3])
+
+    @staticmethod
+    def _handle_task_exception(task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.exception("WebSocket callback failed: %s", exc, exc_info=exc)
 
     async def remove_markets(self, token_ids: list[str]) -> None:
         # Polymarket WS doesn't have an explicit unsubscribe;
@@ -137,7 +145,8 @@ class MarketFeed:
                     if event_type in self._callbacks:
                         for cb in self._callbacks[event_type]:
                             try:
-                                asyncio.create_task(cb(msg))
+                                task = asyncio.create_task(cb(msg))
+                                task.add_done_callback(self._handle_task_exception)
                             except Exception:
                                 logger.exception("Callback error for %s", event_type)
             except json.JSONDecodeError:

@@ -647,19 +647,20 @@ class TradingBot:
                 signals = self.exit_mgr.check_all_positions(
                     books=self._books, bayesian=self.bayesian, scanner=self.scanner,
                 )
-                for signal in signals:
-                    market = self.scanner.get_market(signal.condition_id)
-                    pos = self.positions.get_position(signal.token_id)
-                    executed = await self.exit_mgr.execute_exit(
-                        signal, market, dry_run=self.config.trading.dry_run
-                    )
-                    if executed:
-                        pnl = (signal.current_price - signal.entry_price) * signal.size_to_sell
-                        self.risk_mgr.record_pnl(pnl)
-                        p_hat = self.bayesian.get_estimate(signal.condition_id)
-                        await self._log_exit(signal, market, p_hat or 0.0)
-                        # Record exit time for re-entry cooldown (prevents churn)
-                        self._exit_cooldown[signal.condition_id] = time.time()
+                async with self._analysis_lock:
+                    for signal in signals:
+                        market = self.scanner.get_market(signal.condition_id)
+                        pos = self.positions.get_position(signal.token_id)
+                        executed = await self.exit_mgr.execute_exit(
+                            signal, market, dry_run=self.config.trading.dry_run
+                        )
+                        if executed:
+                            pnl = (signal.current_price - signal.entry_price) * signal.size_to_sell
+                            self.risk_mgr.record_pnl(pnl)
+                            p_hat = self.bayesian.get_estimate(signal.condition_id)
+                            await self._log_exit(signal, market, p_hat or 0.0)
+                            # Record exit time for re-entry cooldown (prevents churn)
+                            self._exit_cooldown[signal.condition_id] = time.time()
             except Exception:
                 logger.exception("Exit sweep failed")
 
