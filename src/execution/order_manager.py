@@ -18,6 +18,18 @@ from src.utils.rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
 
+# Monkey-patch py-clob-client's decimal_places to handle float noise.
+# The original uses Decimal(x.__str__()) which sees artifacts like
+# 15.219999999999999 as 15 decimal places, breaking amount rounding.
+import py_clob_client.order_builder.helpers as _clob_helpers
+
+def _patched_decimal_places(x: float) -> int:
+    # Round to 10 significant figures first to remove float noise
+    rounded = round(x, 10)
+    return abs(Decimal(str(rounded)).normalize().as_tuple().exponent)
+
+_clob_helpers.decimal_places = _patched_decimal_places
+
 BUY = "BUY"
 SELL = "SELL"
 
@@ -108,7 +120,7 @@ class OrderManager:
                 10,
             )
 
-            # Round size to 2 decimal places (CLOB max precision)
+            # Round size to 2dp (CLOB max for taker amount)
             size = round(request.size, 2)
 
             order_args = OrderArgs(
