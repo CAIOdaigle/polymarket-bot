@@ -164,6 +164,7 @@ class EntryLiquidityGate:
                 return list(book.asks)
             return []
         except Exception:
+            logger.exception("Failed to read asks from order book")
             return []
 
     def _get_bids(self, book) -> list[tuple[float, float]]:
@@ -175,4 +176,5 @@ class EntryLiquidityGate:
                 return list(book.bids)
             return []
         except Exception:
+            logger.exception("Failed to read bids from order book")
             return []

@@ -184,7 +184,7 @@ class KellySizer:
                 reason=f"Edge {best_edge:.4f} does not survive spread (min {self.min_edge_spread})",
             )
 
-        if ask_price >= 0.99:
+        if ask_price >= 0.99 or ask_price <= 0.01:
             return SizingResult(
                 should_trade=False,
                 side="HOLD",
@@ -194,7 +194,7 @@ class KellySizer:
                 position_size_usd=0,
                 position_size_shares=0,
                 confidence=lmsr_confidence,
-                reason="Ask price too close to 1.0",
+                reason=f"Ask price {ask_price:.4f} too extreme (must be in 0.01–0.99)",
             )
 
         # -- Time horizon scaling --
@@ -203,7 +203,8 @@ class KellySizer:
 
         # -- Kelly formula (correct denominator per side) --
         # f* = edge / (1 - ask_price) — max loss per share
-        f_star = best_edge / (1.0 - ask_price)
+        denominator = max(1.0 - ask_price, 0.001)
+        f_star = best_edge / denominator
         f_applied = kelly_frac * f_star
 
         # -- Size in USD (NO confidence multiplier — already gated above) --

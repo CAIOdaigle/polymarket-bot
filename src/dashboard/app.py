@@ -126,8 +126,8 @@ def _get_recent_trades(limit: int = 50) -> list[dict]:
 
 
 def _enrich_exit_pnl(conn, trades: list[dict]) -> None:
-    """For each EXIT trade, find its entry and compute actual P&L."""
-    # Cache: condition_id → entry avg price (from the most recent BUY for that condition)
+    """For each EXIT trade, find its entry VWAP and compute actual P&L."""
+    # Cache: condition_id → VWAP entry price (from all BUY orders for that condition)
     entry_cache: dict[str, float] = {}
 
     for t in trades:
@@ -139,23 +139,24 @@ def _enrich_exit_pnl(conn, trades: list[dict]) -> None:
         if not cond_id:
             continue
 
-        # Look up entry price for this condition
+        # Compute VWAP entry price across all BUY orders for this condition
         if cond_id not in entry_cache:
-            row = conn.execute(
-                """SELECT price FROM orders
+            rows = conn.execute(
+                """SELECT price, size FROM orders
                    WHERE condition_id = ? AND side NOT LIKE 'SELL%'
-                   ORDER BY placed_at DESC LIMIT 1""",
+                     AND price > 0 AND size > 0
+                   ORDER BY placed_at""",
                 (cond_id,),
-            ).fetchone()
-            entry_cache[cond_id] = row["price"] if row else 0
+            ).fetchall()
+            total_cost = sum(r["price"] * r["size"] for r in rows)
+            total_shares = sum(r["size"] for r in rows)
+            entry_cache[cond_id] = (total_cost / total_shares) if total_shares > 0 else 0
 
         entry_price = entry_cache[cond_id]
         exit_price = t.get("price") or 0
         shares = t.get("size") or 0
 
         if entry_price > 0 and exit_price > 0 and shares > 0:
-            # For YES positions: sold at exit_price, bought at entry_price
-            # For NO positions: same logic — we track cost basis vs sell price
             pnl_usd = (exit_price - entry_price) * shares
             cost_basis = entry_price * shares
             roi_pct = (pnl_usd / cost_basis * 100) if cost_basis > 0 else 0
@@ -211,7 +212,7 @@ def _get_portfolio() -> dict:
             data = json.loads(PORTFOLIO_PATH.read_text())
             return data
     except Exception:
-        pass
+        app.logger.exception("Failed to load portfolio snapshot from %s", PORTFOLIO_PATH)
     return {
         "usdc_balance": 0,
         "deployed_cost": 0,
