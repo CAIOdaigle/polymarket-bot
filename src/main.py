@@ -641,6 +641,41 @@ class TradingBot:
         if remaining is None:
             await self.state_store.delete_position(signal.token_id)
 
+    async def _refresh_stale_books(self) -> None:
+        """Fetch order books from REST API for positions with empty WS books.
+
+        The WebSocket feed may not deliver updates for thin markets (e.g.
+        weather markets with few participants).  Without this fallback the
+        exit sweep sees best_bid=None and silently skips stop-loss checks.
+        """
+        for pos in self.positions.get_all_open():
+            book = self._books.get(pos.token_id)
+            if book is None:
+                # No book object at all — create one and fetch
+                book = OrderBookState(token_id=pos.token_id)
+                self._books[pos.token_id] = book
+
+            if not book.has_data:
+                rest_data = await self.order_mgr.fetch_order_book(pos.token_id)
+                if rest_data:
+                    bids = rest_data.get("bids", [])
+                    asks = rest_data.get("asks", [])
+                    if bids or asks:
+                        book.update_from_snapshot(bids, asks)
+                        logger.info(
+                            "REST book refresh: %s best_bid=%.4f best_ask=%.4f (%d bids, %d asks)",
+                            pos.token_id[:12],
+                            book.best_bid or 0,
+                            book.best_ask or 0,
+                            len(bids),
+                            len(asks),
+                        )
+                    else:
+                        logger.warning(
+                            "REST book refresh: %s returned empty book (no bids, no asks)",
+                            pos.token_id[:12],
+                        )
+
     async def _periodic_exit_sweep(self) -> None:
         """Periodic sweep for time-based exits and position monitoring."""
         interval = self.config.exit.check_interval_seconds
@@ -649,6 +684,9 @@ class TradingBot:
             if not self.config.exit.enabled:
                 continue
             try:
+                # Refresh empty order books from REST API before sweep
+                await self._refresh_stale_books()
+
                 signals = self.exit_mgr.check_all_positions(
                     books=self._books, bayesian=self.bayesian, scanner=self.scanner,
                 )

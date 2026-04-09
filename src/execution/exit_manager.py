@@ -399,6 +399,16 @@ class ExitManager:
                 hold_seconds = time.time() - pos.entry_time
                 no_bid_timeout = self.cfg.max_hold_hours * 1800  # half max hold
 
+                if best_ask is None:
+                    # Completely empty book — log every time so we can see it
+                    logger.warning(
+                        "EMPTY BOOK: %s (%s, %.2f shares @ %.4f) has no bids AND no asks "
+                        "(held %.1fh, timeout in %.1fh) — WS feed may not be delivering data",
+                        pos.condition_id[:12], pos.side, pos.size, pos.avg_price,
+                        hold_seconds / 3600,
+                        max(0, (no_bid_timeout - hold_seconds)) / 3600,
+                    )
+
                 if best_ask is not None:
                     # Estimate drawdown from ask price (conservative — real exit
                     # would be worse since there are no bids to sell into)

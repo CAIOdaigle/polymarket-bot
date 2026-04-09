@@ -313,6 +313,39 @@ class OrderManager:
 
         return float(amount)
 
+    async def fetch_order_book(self, token_id: str) -> Optional[dict]:
+        """Fetch current order book from REST API.
+
+        Used as a fallback when WebSocket book data is empty/stale.
+        Returns dict with 'bids' and 'asks' lists of {price, size} dicts,
+        compatible with OrderBookState.update_from_snapshot().
+        """
+        if self._client is None:
+            return None
+        loop = asyncio.get_event_loop()
+        try:
+            await self._rate_limiter.public.acquire()
+            summary = await loop.run_in_executor(
+                None, self._client.get_order_book, token_id,
+            )
+            # Convert OrderBookSummary (dataclass with OrderSummary items)
+            # to plain dicts for OrderBookState.update_from_snapshot()
+            bids = [
+                {"price": b.price, "size": b.size}
+                for b in (summary.bids or [])
+            ]
+            asks = [
+                {"price": a.price, "size": a.size}
+                for a in (summary.asks or [])
+            ]
+            return {"bids": bids, "asks": asks}
+        except Exception:
+            logger.debug(
+                "Failed to fetch REST order book for %s",
+                token_id[:12], exc_info=True,
+            )
+            return None
+
     async def poll_open_orders(self) -> list[OrderRecord]:
         """Poll the CLOB API for status of all 'live' orders.
 
