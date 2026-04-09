@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
@@ -186,11 +187,72 @@ class OrderManager:
                 return record
 
             except Exception as exc:
+                error_msg = str(exc)
                 logger.exception(
                     "Failed to place order for %s (side=%s token=%s price=%.4f size=%.2f neg_risk=%s tick=%s): %s",
                     request.condition_id, request.side, request.token_id[:10],
-                    price, request.size, request.neg_risk, request.tick_size, exc,
+                    price, size, request.neg_risk, request.tick_size, exc,
                 )
+
+                # On SELL balance errors, retry with the actual available balance.
+                # Error format: "balance: 118750540, order amount: 120000000"
+                # Values are in token units (6 decimals).
+                if request.side == SELL and "not enough balance" in error_msg:
+                    match = re.search(r"balance:\s*(\d+)", error_msg)
+                    if match:
+                        available_raw = int(match.group(1))
+                        # Convert from token units (6 decimals) to shares,
+                        # floor to 2dp so the CLOB server accepts it.
+                        available = float(
+                            Decimal(str(available_raw))
+                            / Decimal("1000000")
+                        )
+                        adjusted_size = round(available - 0.01, 2)  # small buffer
+                        if adjusted_size > 0:
+                            logger.warning(
+                                "SELL balance mismatch: have %.2f, need %.2f — "
+                                "retrying with %.2f shares",
+                                available, size, adjusted_size,
+                            )
+                            retry_args = OrderArgs(
+                                price=price,
+                                size=adjusted_size,
+                                side=request.side,
+                                token_id=request.token_id,
+                            )
+                            try:
+                                signed_order = await loop.run_in_executor(
+                                    None,
+                                    lambda: self._client.create_order(retry_args, options),
+                                )
+                                resp = await loop.run_in_executor(
+                                    None,
+                                    lambda: self._client.post_order(signed_order, orderType=ot),
+                                )
+                                order_id = resp.get("orderID", resp.get("id", f"UNK-{int(time.time()*1000)}"))
+                                status = resp.get("status", "live")
+                                record = OrderRecord(
+                                    order_id=order_id,
+                                    condition_id=request.condition_id,
+                                    token_id=request.token_id,
+                                    side=request.side,
+                                    price=price,
+                                    size=adjusted_size,
+                                    status=status,
+                                    placed_at=time.time(),
+                                )
+                                self._orders[order_id] = record
+                                logger.info(
+                                    "SELL retry succeeded: %s %.2f @ %.4f (status=%s)",
+                                    order_id, adjusted_size, price, status,
+                                )
+                                return record
+                            except Exception as retry_exc:
+                                logger.exception(
+                                    "SELL retry also failed for %s: %s",
+                                    request.token_id[:10], retry_exc,
+                                )
+
                 record = OrderRecord(
                     order_id=f"FAILED-{int(time.time()*1000)}",
                     condition_id=request.condition_id,
