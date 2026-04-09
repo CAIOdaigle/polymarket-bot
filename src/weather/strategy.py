@@ -279,7 +279,7 @@ class WeatherStrategy:
             side="BUY",
             price=fill_price,
             size=fill_shares,
-            order_type="FOK",  # Fill or Kill — instant fill or cancel
+            order_type="GTC",  # Good Till Cancelled — weather books are thin, FOK often killed
             edge=edge.edge,
             kelly_fraction=edge.kelly_fraction,
             neg_risk=bucket.neg_risk,
