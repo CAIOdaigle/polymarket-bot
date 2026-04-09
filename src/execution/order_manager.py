@@ -21,14 +21,25 @@ logger = logging.getLogger(__name__)
 # Monkey-patch py-clob-client's decimal_places to handle float noise.
 # The original uses Decimal(x.__str__()) which sees artifacts like
 # 15.219999999999999 as 15 decimal places, breaking amount rounding.
+# Also patch to_token_decimals to round amounts to 2dp before conversion,
+# because the CLOB server requires maker amounts with max 2 decimal places
+# but the library's ROUNDING_CONFIG allows up to 4.
 import py_clob_client.order_builder.helpers as _clob_helpers
+from decimal import ROUND_DOWN as _ROUND_DOWN
+
+_orig_to_token_decimals = _clob_helpers.to_token_decimals
 
 def _patched_decimal_places(x: float) -> int:
-    # Round to 10 significant figures first to remove float noise
     rounded = round(x, 10)
     return abs(Decimal(str(rounded)).normalize().as_tuple().exponent)
 
+def _patched_to_token_decimals(x: float) -> int:
+    # Round to 2 decimal places (CLOB server requirement) before converting
+    d = Decimal(str(round(x, 10))).quantize(Decimal("0.01"), rounding=_ROUND_DOWN)
+    return int(d * 10**6)
+
 _clob_helpers.decimal_places = _patched_decimal_places
+_clob_helpers.to_token_decimals = _patched_to_token_decimals
 
 BUY = "BUY"
 SELL = "SELL"
