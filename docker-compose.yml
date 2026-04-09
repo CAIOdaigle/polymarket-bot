@@ -6,7 +6,7 @@ services:
     restart: unless-stopped
     env_file: .env
     ports:
-      - "127.0.0.1:5050:5050"
+      - "0.0.0.0:5050:5050"
     volumes:
       - bot-data:/app/data
       - bot-logs:/app/logs
