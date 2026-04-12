@@ -2,5 +2,20 @@
 trading:
   dry_run: true
 
+# Master strategy toggles — turn algos on/off independently
+strategies:
+  bayesian: true      # LMSR/Bayesian signal-based trading
+  weather: false       # Weather temperature prediction (disabled: miscalibrated)
+  btc_sniper: true     # BTC 5-min up/down sniper
+
 weather:
   enabled: false
+
+btc_sniper:
+  enabled: true
+  mode: safe           # safe (25%/trade), aggressive (profits only), degen (all-in)
+  starting_bankroll: 50.0
+  min_bet_usd: 1.0
+  min_confidence: 0.30
+  entry_seconds_before_close: 10
+  max_trades_per_session: 0  # 0 = unlimited

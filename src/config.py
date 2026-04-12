@@ -235,6 +235,28 @@ class WeatherConfig(BaseSettings):
     model_config = {"extra": "ignore"}
 
 
+class BTCSniperConfig(BaseSettings):
+    enabled: bool = False
+    mode: str = "safe"  # "safe", "aggressive", "degen"
+    starting_bankroll: float = 50.0
+    min_bet_usd: float = 1.0
+    min_confidence: float = 0.30  # safe=0.30, aggressive=0.20, degen=0.0
+    entry_seconds_before_close: int = 10  # T-10s: sweet spot per gist
+    max_trades_per_session: int = 0  # 0 = unlimited
+    eval_interval_seconds: float = 5.0  # how often the main loop checks for windows
+
+    model_config = {"extra": "ignore"}
+
+
+class StrategiesConfig(BaseSettings):
+    """Master toggle for all strategy modules."""
+    bayesian: bool = True  # original LMSR/Bayesian strategy
+    weather: bool = False  # weather temperature prediction
+    btc_sniper: bool = False  # BTC 5-min up/down sniper
+
+    model_config = {"extra": "ignore"}
+
+
 class MarketFilterConfig(BaseSettings):
     include_slugs: list[str] = Field(default_factory=list)
     exclude_slugs: list[str] = Field(default_factory=list)
@@ -261,6 +283,8 @@ class BotConfig:
         logging: LoggingConfig,
         market_filter: MarketFilterConfig,
         weather: Optional[WeatherConfig] = None,
+        btc_sniper: Optional[BTCSniperConfig] = None,
+        strategies: Optional[StrategiesConfig] = None,
     ):
         self.polymarket = polymarket
         self.trading = trading
@@ -276,6 +300,8 @@ class BotConfig:
         self.logging = logging
         self.market_filter = market_filter
         self.weather = weather or WeatherConfig()
+        self.btc_sniper = btc_sniper or BTCSniperConfig()
+        self.strategies = strategies or StrategiesConfig()
 
 
 def load_config(env: Optional[str] = None) -> BotConfig:
@@ -288,6 +314,8 @@ def load_config(env: Optional[str] = None) -> BotConfig:
     filters = _load_yaml("markets_filter.yaml")
 
     weather_cfg = merged.get("weather", {})
+    btc_sniper_cfg = merged.get("btc_sniper", {})
+    strategies_cfg = merged.get("strategies", {})
 
     return BotConfig(
         polymarket=PolymarketConfig(),
@@ -304,4 +332,6 @@ def load_config(env: Optional[str] = None) -> BotConfig:
         logging=LoggingConfig(**merged.get("logging", {})),
         market_filter=MarketFilterConfig(**filters),
         weather=WeatherConfig(**weather_cfg) if weather_cfg else WeatherConfig(),
+        btc_sniper=BTCSniperConfig(**btc_sniper_cfg) if btc_sniper_cfg else BTCSniperConfig(),
+        strategies=StrategiesConfig(**strategies_cfg) if strategies_cfg else StrategiesConfig(),
     )

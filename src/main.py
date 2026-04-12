@@ -38,6 +38,8 @@ from src.sizing.entry_liquidity_gate import EntryLiquidityGate, EntryLiquidityCo
 from src.sizing.kelly_sizer import KellySizer
 from src.sizing.risk_manager import RiskManager
 from src.utils.logging_config import setup_logging
+from src.btc_sniper.binance_feed import BinanceFeed
+from src.btc_sniper.sniper import BTCSniper
 from src.weather.forecast_client import WeatherForecastClient
 from src.weather.strategy import WeatherStrategy
 
@@ -121,9 +123,22 @@ class TradingBot:
         self._shutdown_event = asyncio.Event()
         self._analysis_lock = asyncio.Lock()
 
+        # Strategy toggles
+        strat = config.strategies
+        self._bayesian_enabled = strat.bayesian
+        self._btc_sniper_enabled = strat.btc_sniper and config.btc_sniper.enabled
+
+        # BTC 5-min sniper strategy
+        if self._btc_sniper_enabled:
+            self._binance_feed = BinanceFeed()
+            self._btc_sniper: BTCSniper | None = None  # initialized after order_mgr
+        else:
+            self._binance_feed = None
+            self._btc_sniper = None
+
         # Weather strategy (separate pipeline from Bayesian)
         weather_cfg = config.weather
-        self._weather_enabled = weather_cfg.enabled if weather_cfg else False
+        self._weather_enabled = strat.weather and (weather_cfg.enabled if weather_cfg else False)
         if self._weather_enabled:
             self._forecast_client = WeatherForecastClient(
                 cache_ttl_seconds=weather_cfg.forecast_cache_ttl_seconds,
@@ -176,6 +191,25 @@ class TradingBot:
         self.feed.on_price_change(self._on_price_change)
         self.feed.on_trade(self._on_trade)
 
+        # Initialize BTC sniper strategy
+        if self._btc_sniper_enabled and self._binance_feed is not None:
+            await self._binance_feed.start()
+            self._btc_sniper = BTCSniper(
+                config=self.config.btc_sniper,
+                binance_feed=self._binance_feed,
+                order_mgr=self.order_mgr,
+                positions=self.positions,
+                state_store=self.state_store,
+                dry_run=self.config.trading.dry_run,
+            )
+            await self._btc_sniper.start()
+            logger.info(
+                "BTC Sniper initialized (mode=%s, bankroll=$%.2f, dry_run=%s)",
+                self.config.btc_sniper.mode,
+                self.config.btc_sniper.starting_bankroll,
+                self.config.trading.dry_run,
+            )
+
         # Initialize weather strategy now that scanner is ready
         if self._weather_enabled and self._forecast_client is not None:
             self._weather_strategy = WeatherStrategy(
@@ -205,11 +239,14 @@ class TradingBot:
         self._orphan_tokens_to_subscribe = orphan_tokens
 
         logger.info(
-            "Bot initialized: %d markets, dry_run=%s, bankroll=$%.2f, weather=%s",
+            "Bot initialized: %d markets, dry_run=%s, bankroll=$%.2f, "
+            "strategies: bayesian=%s weather=%s btc_sniper=%s",
             len(markets),
             self.config.trading.dry_run,
             self.config.trading.total_bankroll_usd,
-            "enabled" if self._weather_enabled else "disabled",
+            self._bayesian_enabled,
+            self._weather_enabled,
+            self._btc_sniper_enabled,
         )
 
         await self.slack.notify_startup(
@@ -269,6 +306,8 @@ class TradingBot:
         )
 
     async def _analyze_and_maybe_trade(self, condition_id: str) -> None:
+        if not self._bayesian_enabled:
+            return
         async with self._analysis_lock:
             market = self.scanner.get_market(condition_id)
             if market is None:
@@ -873,6 +912,33 @@ class TradingBot:
                 logger.exception("Weather evaluation failed")
             await asyncio.sleep(interval)
 
+    async def _periodic_btc_sniper(self) -> None:
+        """Run BTC 5-minute up/down sniper in a continuous loop."""
+        # Initial delay — let Binance feed populate
+        await asyncio.sleep(15)
+        max_trades = self.config.btc_sniper.max_trades_per_session
+        while not self._shutdown_event.is_set():
+            try:
+                if self._btc_sniper is not None:
+                    if max_trades > 0 and self._btc_sniper._trade_count >= max_trades:
+                        logger.info(
+                            "BTC Sniper: reached max trades (%d), stopping",
+                            max_trades,
+                        )
+                        break
+                    result = await self._btc_sniper.run_single_window()
+                    if result and result.order_status != "skipped":
+                        stats = self._btc_sniper.stats
+                        logger.info(
+                            "BTC Sniper stats: %d trades, %.1f%% win rate, P&L=$%.2f",
+                            stats["trades"], stats["win_rate"] * 100, stats["pnl"],
+                        )
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                logger.exception("BTC Sniper loop failed")
+                await asyncio.sleep(30)
+
     async def _periodic_order_poll(self) -> None:
         """Poll live orders for fills and update position tracker."""
         while not self._shutdown_event.is_set():
@@ -931,7 +997,23 @@ class TradingBot:
                 asyncio.create_task(self._periodic_weather_eval(), name="weather_eval")
             )
 
-        logger.info("Bot running — %d markets, waiting for data...", len(self.scanner.markets))
+        if self._btc_sniper_enabled:
+            tasks.append(
+                asyncio.create_task(self._periodic_btc_sniper(), name="btc_sniper")
+            )
+
+        # Log active strategies
+        active = []
+        if self._bayesian_enabled:
+            active.append("bayesian")
+        if self._weather_enabled:
+            active.append("weather")
+        if self._btc_sniper_enabled:
+            active.append(f"btc_sniper({self.config.btc_sniper.mode})")
+        logger.info(
+            "Bot running — %d markets, strategies=[%s], waiting for data...",
+            len(self.scanner.markets), ", ".join(active) or "none",
+        )
 
         await self._shutdown_event.wait()
 
@@ -944,6 +1026,10 @@ class TradingBot:
         await self.state_store.close()
         if self._forecast_client is not None:
             await self._forecast_client.close()
+        if self._btc_sniper is not None:
+            await self._btc_sniper.stop()
+        if self._binance_feed is not None:
+            await self._binance_feed.stop()
         logger.info("Shutdown complete")
 
     def request_shutdown(self) -> None:
