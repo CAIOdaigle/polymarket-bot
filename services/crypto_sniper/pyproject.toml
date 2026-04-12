@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Fast crypto-linked trading strategies for Polymarket binary markets"
 requires-python = ">=3.11"
 dependencies = [
-    "polymarket-common @ file:../../polymarket_common",
+    "polymarket-common",
     "aiohttp>=3.9",
     "scipy>=1.10",
     "pydantic>=2.0",
