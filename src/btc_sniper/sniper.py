@@ -174,10 +174,18 @@ class BTCSniper:
             prev_score = result.score
             await asyncio.sleep(2)
 
-        if best_result is None:
+        if best_result is None or (not fired and best_result.confidence < self.cfg.min_confidence):
+            logger.info(
+                "BTC Sniper: skipping window %d — confidence %.1f%% below threshold %.0f%%",
+                window_ts,
+                (best_result.confidence * 100) if best_result else 0,
+                self.cfg.min_confidence * 100,
+            )
             return SniperTradeResult(
-                window_ts=window_ts, direction="", confidence=0,
-                score=0, token_price=0, bet_size_usd=0,
+                window_ts=window_ts, direction=best_result.direction if best_result else "",
+                confidence=best_result.confidence if best_result else 0,
+                score=best_result.score if best_result else 0,
+                token_price=0, bet_size_usd=0,
                 order_status="skipped",
             )
 
