@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   polymarket-bot:
     build: .
@@ -8,7 +6,7 @@ services:
     ports:
       - "0.0.0.0:5050:5050"
     volumes:
-      - bot-data:/app/data
+      - shared-data:/app/data
       - bot-logs:/app/logs
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5050/')"]
@@ -16,6 +14,17 @@ services:
       timeout: 10s
       retries: 3
 
+  crypto-sniper:
+    build:
+      context: .
+      dockerfile: services/crypto_sniper/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - shared-data:/app/data
+      - sniper-logs:/app/logs
+
 volumes:
-  bot-data:
+  shared-data:
   bot-logs:
+  sniper-logs:

@@ -1,0 +1,113 @@
+"""Shared configuration classes used by all Polymarket trading services."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Optional
+
+import yaml
+from pydantic import Field
+from pydantic_settings import BaseSettings
+
+
+def _project_root() -> Path:
+    """Return the monorepo root (two levels up from this file)."""
+    return Path(__file__).resolve().parent.parent.parent
+
+
+def _load_yaml(name: str, config_dir: Path | None = None) -> dict:
+    if config_dir is None:
+        config_dir = _project_root() / "config"
+    path = config_dir / name
+    if path.exists():
+        with open(path) as f:
+            return yaml.safe_load(f) or {}
+    return {}
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    merged = base.copy()
+    for key, value in override.items():
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+class PolymarketConfig(BaseSettings):
+    private_key: str = Field("", alias="POLYMARKET_PRIVATE_KEY")
+    funder_address: str = Field("", alias="POLYMARKET_FUNDER_ADDRESS")
+    chain_id: int = Field(137, alias="POLYMARKET_CHAIN_ID")
+    clob_host: str = Field("https://clob.polymarket.com", alias="CLOB_HOST")
+    gamma_host: str = Field("https://gamma-api.polymarket.com", alias="GAMMA_HOST")
+
+    model_config = {"env_file": ".env", "extra": "ignore"}
+
+
+class TradingConfig(BaseSettings):
+    kelly_fraction: float = 0.5
+    min_edge_threshold: float = 0.02
+    max_position_usd: float = 100.0
+    total_bankroll_usd: float = 1000.0
+    max_portfolio_exposure: float = 0.5
+    min_liquidity_usd: float = 500.0
+    order_type: str = "GTC"
+    price_tolerance: float = 0.005
+    stale_order_timeout_seconds: int = 300
+    daily_loss_limit_usd: float = 100.0
+    max_event_exposure_pct: float = 0.30
+    reentry_cooldown_seconds: float = 3600.0
+    max_plausible_edge: float = 0.20
+    dry_run: bool = True
+
+    model_config = {"extra": "ignore"}
+
+
+class ExitConfig(BaseSettings):
+    enabled: bool = True
+    stop_loss_pct: float = 0.15
+    trailing_stop_pct: float = 0.10
+    take_profit_pct: float = 0.15
+    take_profit_sell_fraction: float = 0.50
+    edge_floor_threshold: float = -0.05
+    edge_floor_confidence_min: float = 0.40
+    edge_convergence_threshold: float = 0.03
+    edge_convergence_min_hold_s: float = 300.0
+    min_exit_liquidity_pct: float = 0.80
+    min_acceptable_bid_pct: float = 0.95
+    max_hold_hours: float = 72.0
+    emergency_floor_pct: float = 0.25
+    exit_cooldown_seconds: float = 60.0
+    check_interval_seconds: float = 30.0
+
+    model_config = {"extra": "ignore"}
+
+
+class FeedConfig(BaseSettings):
+    ws_reconnect_max_delay: int = 60
+    rest_poll_interval_seconds: int = 30
+    heartbeat_interval_seconds: int = 10
+
+    model_config = {"extra": "ignore"}
+
+
+class SlackConfig(BaseSettings):
+    webhook_url: str = Field("", alias="SLACK_WEBHOOK_URL")
+    notify_on_trade: bool = True
+    notify_on_error: bool = True
+    notify_on_startup: bool = True
+    daily_summary_hour_utc: int = 0
+
+    model_config = {"env_file": ".env", "extra": "ignore"}
+
+
+class LoggingConfig(BaseSettings):
+    level: str = "INFO"
+    format: str = "json"
+    file: str = "logs/bot.log"
+    max_bytes: int = 10_485_760
+    backup_count: int = 5
+
+    model_config = {"extra": "ignore"}

@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Bayesian trading bot for Polymarket using LMSR analysis and Half-Kelly sizing"
 requires-python = ">=3.9"
 dependencies = [
+    "polymarket-common @ file:polymarket_common",
     "py-clob-client>=0.34",
     "aiohttp>=3.9",
     "websockets>=12.0",

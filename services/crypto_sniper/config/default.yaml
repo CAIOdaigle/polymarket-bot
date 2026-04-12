@@ -1,0 +1,37 @@
+strategies:
+  ta_sniper: true
+  oracle_sniper: false  # enable after validation
+
+trading:
+  dry_run: true
+  total_bankroll_usd: 50.0
+
+ta_sniper:
+  mode: safe
+  min_confidence: 0.30
+  entry_seconds_before_close: 10
+  min_ev_edge: 0.05
+  eval_interval_seconds: 2.0
+  use_timesfm: false
+
+oracle_sniper:
+  poll_interval_ms: 200
+  entry_window_min_seconds: 8
+  entry_window_max_seconds: 55
+  min_lag_score: 0.60
+  min_net_edge: 0.05
+  confirmation_threshold: 0.003
+
+kelly:
+  fraction: 0.25
+  min_bet_usd: 4.75
+
+feeds:
+  binance_ws_url: "wss://stream.binance.com:9443/ws/btcusdt@trade"
+  binance_rest_url: "https://api.binance.com/api/v3"
+  binance_symbol: "BTCUSDT"
+
+logging:
+  level: INFO
+  format: json
+  file: logs/sniper.log

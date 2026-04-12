@@ -1,0 +1,21 @@
+[project]
+name = "polymarket-common"
+version = "0.1.0"
+description = "Shared execution, persistence, and notification layer for Polymarket trading services"
+requires-python = ">=3.9"
+dependencies = [
+    "py-clob-client>=0.34",
+    "aiohttp>=3.9",
+    "aiosqlite>=0.19",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "pyyaml>=6.0",
+    "slack-sdk>=3.27",
+    "python-json-logger>=2.0",
+    "numpy>=1.24",
+    "python-dotenv>=1.0",
+]
+
+[build-system]
+requires = ["setuptools>=64.0"]
+build-backend = "setuptools.build_meta"

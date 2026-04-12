@@ -1,0 +1,31 @@
+[project]
+name = "crypto-sniper"
+version = "0.1.0"
+description = "Fast crypto-linked trading strategies for Polymarket binary markets"
+requires-python = ">=3.11"
+dependencies = [
+    "polymarket-common @ file:../../polymarket_common",
+    "aiohttp>=3.9",
+    "scipy>=1.10",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+timesfm = [
+    "timesfm>=1.2",
+    "torch>=2.0",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+]
+
+[build-system]
+requires = ["setuptools>=64.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

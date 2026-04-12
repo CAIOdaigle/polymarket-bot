@@ -8,6 +8,17 @@ import yaml
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
+# Re-export shared config classes from polymarket_common
+from polymarket_common.config import (  # noqa: F401
+    PolymarketConfig,
+    TradingConfig,
+    ExitConfig,
+    FeedConfig,
+    SlackConfig,
+    LoggingConfig,
+    _deep_merge,
+)
+
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parent.parent
@@ -19,45 +30,6 @@ def _load_yaml(name: str) -> dict:
         with open(path) as f:
             return yaml.safe_load(f) or {}
     return {}
-
-
-def _deep_merge(base: dict, override: dict) -> dict:
-    merged = base.copy()
-    for key, value in override.items():
-        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
-            merged[key] = _deep_merge(merged[key], value)
-        else:
-            merged[key] = value
-    return merged
-
-
-class PolymarketConfig(BaseSettings):
-    private_key: str = Field("", alias="POLYMARKET_PRIVATE_KEY")
-    funder_address: str = Field("", alias="POLYMARKET_FUNDER_ADDRESS")
-    chain_id: int = Field(137, alias="POLYMARKET_CHAIN_ID")
-    clob_host: str = Field("https://clob.polymarket.com", alias="CLOB_HOST")
-    gamma_host: str = Field("https://gamma-api.polymarket.com", alias="GAMMA_HOST")
-
-    model_config = {"env_file": ".env", "extra": "ignore"}
-
-
-class TradingConfig(BaseSettings):
-    kelly_fraction: float = 0.5
-    min_edge_threshold: float = 0.02
-    max_position_usd: float = 100.0
-    total_bankroll_usd: float = 1000.0
-    max_portfolio_exposure: float = 0.5
-    min_liquidity_usd: float = 500.0
-    order_type: str = "GTC"
-    price_tolerance: float = 0.005
-    stale_order_timeout_seconds: int = 300
-    daily_loss_limit_usd: float = 100.0
-    max_event_exposure_pct: float = 0.30  # max 30% of bankroll per event cluster
-    reentry_cooldown_seconds: float = 3600.0  # 60 min cooldown after exiting before re-entering same market
-    max_plausible_edge: float = 0.20  # edges above this are likely model error, not alpha
-    dry_run: bool = True
-
-    model_config = {"extra": "ignore"}
 
 
 class LMSRConfig(BaseSettings):
@@ -161,59 +133,11 @@ class SignalConfig(BaseSettings):
     model_config = {"extra": "ignore"}
 
 
-class ExitConfig(BaseSettings):
-    enabled: bool = True
-    stop_loss_pct: float = 0.15  # 15% price-based stop-loss (from entry)
-    trailing_stop_pct: float = 0.10  # 10% trailing stop (from high-water mark)
-    take_profit_pct: float = 0.15  # +15% triggers partial take-profit
-    take_profit_sell_fraction: float = 0.50  # sell 50% of position
-    edge_floor_threshold: float = -0.05
-    edge_floor_confidence_min: float = 0.40  # lowered: sparse books rarely exceed 0.40
-    edge_convergence_threshold: float = 0.03
-    edge_convergence_min_hold_s: float = 300.0
-    min_exit_liquidity_pct: float = 0.80
-    min_acceptable_bid_pct: float = 0.95
-    max_hold_hours: float = 72.0
-    emergency_floor_pct: float = 0.25
-    exit_cooldown_seconds: float = 60.0
-    check_interval_seconds: float = 30.0
-
-    model_config = {"extra": "ignore"}
-
-
 class ScannerConfig(BaseSettings):
     rescan_interval_seconds: int = 300
     min_volume_24h_usd: float = 100.0
     min_liquidity_usd: float = 500.0
     min_hours_to_expiry: float = 24.0
-
-    model_config = {"extra": "ignore"}
-
-
-class FeedConfig(BaseSettings):
-    ws_reconnect_max_delay: int = 60
-    rest_poll_interval_seconds: int = 30
-    heartbeat_interval_seconds: int = 10
-
-    model_config = {"extra": "ignore"}
-
-
-class SlackConfig(BaseSettings):
-    webhook_url: str = Field("", alias="SLACK_WEBHOOK_URL")
-    notify_on_trade: bool = True
-    notify_on_error: bool = True
-    notify_on_startup: bool = True
-    daily_summary_hour_utc: int = 0
-
-    model_config = {"env_file": ".env", "extra": "ignore"}
-
-
-class LoggingConfig(BaseSettings):
-    level: str = "INFO"
-    format: str = "json"
-    file: str = "logs/bot.log"
-    max_bytes: int = 10_485_760
-    backup_count: int = 5
 
     model_config = {"extra": "ignore"}
 
@@ -235,24 +159,10 @@ class WeatherConfig(BaseSettings):
     model_config = {"extra": "ignore"}
 
 
-class BTCSniperConfig(BaseSettings):
-    enabled: bool = False
-    mode: str = "safe"  # "safe", "aggressive", "degen"
-    starting_bankroll: float = 50.0
-    min_bet_usd: float = 1.0
-    min_confidence: float = 0.30  # safe=0.30, aggressive=0.20, degen=0.0
-    entry_seconds_before_close: int = 10  # T-10s: sweet spot per gist
-    max_trades_per_session: int = 0  # 0 = unlimited
-    eval_interval_seconds: float = 5.0  # how often the main loop checks for windows
-
-    model_config = {"extra": "ignore"}
-
-
 class StrategiesConfig(BaseSettings):
     """Master toggle for all strategy modules."""
     bayesian: bool = True  # original LMSR/Bayesian strategy
     weather: bool = False  # weather temperature prediction
-    btc_sniper: bool = False  # BTC 5-min up/down sniper
 
     model_config = {"extra": "ignore"}
 
@@ -283,7 +193,6 @@ class BotConfig:
         logging: LoggingConfig,
         market_filter: MarketFilterConfig,
         weather: Optional[WeatherConfig] = None,
-        btc_sniper: Optional[BTCSniperConfig] = None,
         strategies: Optional[StrategiesConfig] = None,
     ):
         self.polymarket = polymarket
@@ -300,7 +209,6 @@ class BotConfig:
         self.logging = logging
         self.market_filter = market_filter
         self.weather = weather or WeatherConfig()
-        self.btc_sniper = btc_sniper or BTCSniperConfig()
         self.strategies = strategies or StrategiesConfig()
 
 
@@ -314,7 +222,6 @@ def load_config(env: Optional[str] = None) -> BotConfig:
     filters = _load_yaml("markets_filter.yaml")
 
     weather_cfg = merged.get("weather", {})
-    btc_sniper_cfg = merged.get("btc_sniper", {})
     strategies_cfg = merged.get("strategies", {})
 
     return BotConfig(
@@ -332,6 +239,5 @@ def load_config(env: Optional[str] = None) -> BotConfig:
         logging=LoggingConfig(**merged.get("logging", {})),
         market_filter=MarketFilterConfig(**filters),
         weather=WeatherConfig(**weather_cfg) if weather_cfg else WeatherConfig(),
-        btc_sniper=BTCSniperConfig(**btc_sniper_cfg) if btc_sniper_cfg else BTCSniperConfig(),
         strategies=StrategiesConfig(**strategies_cfg) if strategies_cfg else StrategiesConfig(),
     )
