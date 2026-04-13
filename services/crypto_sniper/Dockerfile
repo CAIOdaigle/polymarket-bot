@@ -12,6 +12,9 @@ COPY services/crypto_sniper/crypto_sniper/ /app/services/crypto_sniper/crypto_sn
 COPY services/crypto_sniper/config/ /app/services/crypto_sniper/config/
 RUN pip install --no-cache-dir /app/services/crypto_sniper
 
+COPY services/crypto_sniper/start.sh /app/start.sh
+RUN chmod +x /app/start.sh
+
 RUN useradd -m -u 1000 sniperuser && \
     mkdir -p /app/data /app/logs && \
     chown -R sniperuser:sniperuser /app/data /app/logs
@@ -25,8 +28,5 @@ ENV PYTHONPATH=/app/services/crypto_sniper
 ENV SNIPER_DATA_DIR=/app/data
 
 EXPOSE 5051
-
-COPY services/crypto_sniper/start.sh /app/start.sh
-RUN chmod +x /app/start.sh
 
 ENTRYPOINT ["sh", "/app/start.sh"]
