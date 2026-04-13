@@ -20,6 +20,8 @@ services:
       dockerfile: services/crypto_sniper/Dockerfile
     restart: unless-stopped
     env_file: .env
+    ports:
+      - "0.0.0.0:5051:5051"
     volumes:
       - shared-data:/app/data
       - sniper-logs:/app/logs

@@ -22,5 +22,11 @@ VOLUME ["/app/data", "/app/logs"]
 
 ENV SNIPER_ENV=production
 ENV PYTHONPATH=/app/services/crypto_sniper
+ENV SNIPER_DATA_DIR=/app/data
 
-CMD ["python", "-m", "crypto_sniper.main"]
+EXPOSE 5051
+
+COPY services/crypto_sniper/start.sh /app/start.sh
+RUN chmod +x /app/start.sh
+
+ENTRYPOINT ["sh", "/app/start.sh"]

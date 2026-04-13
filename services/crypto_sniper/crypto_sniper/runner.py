@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import signal
 import time
+from pathlib import Path
 from typing import Optional
 
 from polymarket_common.execution.order_manager import OrderManager, TradeRequest
@@ -58,6 +61,8 @@ class StrategyRunner:
         self._win_count = 0
         self._loss_count = 0
         self._traded_windows: set[int] = set()
+        self._stats_path = Path(os.environ.get("SNIPER_DATA_DIR", "/app/data")) / "sniper_stats.json"
+        self._write_stats_snapshot()
 
     def register(self, strategy: BaseStrategy) -> None:
         self._strategies.append(strategy)
@@ -81,6 +86,9 @@ class StrategyRunner:
             self.config.trading.dry_run,
         )
 
+        # Periodic stats snapshot refresher (keeps btc_price fresh)
+        stats_task = asyncio.create_task(self._periodic_stats_refresh())
+
         while not self._shutdown_event.is_set():
             try:
                 await self._run_window()
@@ -91,6 +99,7 @@ class StrategyRunner:
                 await asyncio.sleep(10)
 
         # Shutdown
+        stats_task.cancel()
         logger.info("StrategyRunner shutting down...")
         for strategy in self._strategies:
             await strategy.shutdown()
@@ -335,6 +344,9 @@ class StrategyRunner:
             win_rate,
         )
 
+        # Update stats snapshot for dashboard
+        self._write_stats_snapshot()
+
         # Log to state store
         await self.state_store.log_trade(
             order_id=f"sniper-{window_ts}-{signal.strategy_name}",
@@ -362,5 +374,32 @@ class StrategyRunner:
             "losses": self._loss_count,
             "win_rate": self._win_count / total if total > 0 else 0,
             "bankroll": round(self._bankroll, 2),
+            "starting_bankroll": round(self._original_bankroll, 2),
             "pnl": round(self._bankroll - self._original_bankroll, 2),
         }
+
+    async def _periodic_stats_refresh(self) -> None:
+        """Refresh stats snapshot every 15s so the dashboard sees live BTC price."""
+        while not self._shutdown_event.is_set():
+            try:
+                self._write_stats_snapshot()
+            except Exception:
+                pass
+            try:
+                await asyncio.wait_for(self._shutdown_event.wait(), timeout=15.0)
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                break
+
+    def _write_stats_snapshot(self) -> None:
+        """Persist runtime stats to JSON for the dashboard."""
+        try:
+            self._stats_path.parent.mkdir(parents=True, exist_ok=True)
+            snapshot = self.stats
+            snapshot["btc_price"] = self.feed_mgr.get_latest_price()
+            snapshot["dry_run"] = self.config.trading.dry_run
+            snapshot["updated_at"] = time.time()
+            self._stats_path.write_text(json.dumps(snapshot, indent=2))
+        except Exception:
+            logger.debug("Failed to write stats snapshot", exc_info=True)

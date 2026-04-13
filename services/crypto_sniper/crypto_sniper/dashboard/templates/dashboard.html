@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crypto Sniper Dashboard</title>
+    <meta http-equiv="refresh" content="15">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0d1117;
+            color: #e6edf3;
+            padding: 20px;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid #30363d;
+        }
+        .header h1 { font-size: 24px; font-weight: 600; }
+        .header h1 .tag {
+            background: #f7931a; color: #000; padding: 2px 8px;
+            border-radius: 4px; font-size: 12px; margin-left: 8px; vertical-align: middle;
+        }
+        .header .time { color: #8b949e; font-size: 14px; }
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .card {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 20px;
+        }
+        .card .label { color: #8b949e; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .card .value { font-size: 28px; font-weight: 600; margin-top: 4px; }
+        .card .value.green { color: #3fb950; }
+        .card .value.red { color: #f85149; }
+        .card .value.blue { color: #58a6ff; }
+        .card .value.yellow { color: #d29922; }
+        .card .value.orange { color: #f7931a; }
+        .card .sub { color: #8b949e; font-size: 12px; margin-top: 4px; }
+        .section {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 24px;
+        }
+        .section h2 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #30363d;
+        }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th {
+            text-align: left;
+            padding: 8px 12px;
+            color: #8b949e;
+            font-weight: 500;
+            border-bottom: 1px solid #30363d;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        td { padding: 8px 12px; border-bottom: 1px solid #21262d; }
+        tr:hover { background: #1c2128; }
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+        .badge.buy { background: #1f6feb33; color: #58a6ff; }
+        .badge.sell { background: #f8514933; color: #f85149; }
+        .badge.unknown { background: #30363d; color: #8b949e; }
+        .status-live { background: #3fb95033; color: #3fb950; padding: 4px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+        .status-dry { background: #d2992233; color: #d29922; padding: 4px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+        .empty { text-align: center; color: #8b949e; padding: 40px 0; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>
+            Crypto Sniper <span class="tag">BTC</span>
+            {% if is_live %}
+                <span class="status-live">LIVE</span>
+            {% else %}
+                <span class="status-dry">DRY RUN</span>
+            {% endif %}
+        </h1>
+        <div class="time">Updated: {{ now }}</div>
+    </div>
+
+    <div class="cards">
+        <div class="card">
+            <div class="label">BTC Price</div>
+            <div class="value orange">
+                {% if stats.btc_price %}${{ "{:,.2f}".format(stats.btc_price) }}{% else %}—{% endif %}
+            </div>
+            <div class="sub">Live Binance WS</div>
+        </div>
+        <div class="card">
+            <div class="label">Bankroll</div>
+            <div class="value {% if stats.pnl > 0 %}green{% elif stats.pnl < 0 %}red{% else %}blue{% endif %}">
+                ${{ "%.2f"|format(stats.bankroll) }}
+            </div>
+            <div class="sub">
+                Start: ${{ "%.2f"|format(stats.starting_bankroll) }} •
+                PnL: {% if stats.pnl >= 0 %}+{% endif %}${{ "%.2f"|format(stats.pnl) }}
+            </div>
+        </div>
+        <div class="card">
+            <div class="label">Win Rate</div>
+            <div class="value {% if stats.win_rate >= 0.55 %}green{% elif stats.win_rate >= 0.45 %}yellow{% else %}red{% endif %}">
+                {{ "%.1f"|format(stats.win_rate * 100) }}%
+            </div>
+            <div class="sub">W/L: {{ stats.wins }} / {{ stats.losses }}</div>
+        </div>
+        <div class="card">
+            <div class="label">Resolved Trades</div>
+            <div class="value blue">{{ stats.trades }}</div>
+            <div class="sub">{{ trade_count }} logged total</div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Recent Trades ({{ trades|length }})</h2>
+        {% if trades %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Time (UTC)</th>
+                        <th>Strategy</th>
+                        <th>Dir</th>
+                        <th>Token $</th>
+                        <th>Bet</th>
+                        <th>Conf</th>
+                        <th>EV Edge</th>
+                        <th>Status</th>
+                        <th>Market</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for t in trades %}
+                    <tr>
+                        <td>{{ t.placed_at_fmt }}</td>
+                        <td>{{ t.strategy }}</td>
+                        <td><span class="badge {{ t.direction }}">{{ t.side_display }}</span></td>
+                        <td>{{ t.price_fmt }}</td>
+                        <td>{{ t.size_display }}</td>
+                        <td>{{ t.conf_fmt }}</td>
+                        <td>{{ t.edge_pct }}</td>
+                        <td>{{ t.status }}</td>
+                        <td>{{ t.market_short }}</td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <div class="empty">No sniper trades yet. Waiting for the next 5-minute window...</div>
+        {% endif %}
+    </div>
+</body>
+</html>
