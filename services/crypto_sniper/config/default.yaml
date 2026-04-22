@@ -31,9 +31,12 @@ kelly:
   min_bet_usd: 1.00
 
 feeds:
-  binance_ws_url: "wss://stream.binance.com:9443/ws/btcusdt@trade"
+  # binance_symbol + binance_ws_url are auto-derived from the top-level
+  # `asset` setting (or SNIPER_ASSET env var). Leave blank unless you
+  # explicitly need to override (e.g. to point at a different exchange).
+  binance_ws_url: ""
   binance_rest_url: "https://api.binance.com/api/v3"
-  binance_symbol: "BTCUSDT"
+  binance_symbol: ""
 
 logging:
   level: INFO

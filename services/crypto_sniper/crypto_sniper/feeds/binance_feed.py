@@ -52,7 +52,7 @@ class BinanceFeed:
         if price:
             self._latest_price = price
             self._tick_prices.append((time.time(), price))
-            logger.info("Binance initial BTC price: $%.2f", price)
+            logger.info("Binance initial %s price: $%.2f", self.symbol, price)
 
         # Start WebSocket listener
         self._ws_task = asyncio.create_task(
