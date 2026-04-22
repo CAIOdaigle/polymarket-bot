@@ -80,6 +80,11 @@ class StateStore:
         for col, col_type in [
             ("confidence", "REAL"),
             ("market_question", "TEXT"),
+            ("btc_open", "REAL"),
+            ("btc_close", "REAL"),
+            ("outcome", "TEXT"),
+            ("pnl_usd", "REAL"),
+            ("exit_price", "REAL"),
         ]:
             try:
                 await self._db.execute(
@@ -116,6 +121,11 @@ class StateStore:
         placed_at: float,
         confidence: float = 0.0,
         market_question: str = "",
+        btc_open: float | None = None,
+        btc_close: float | None = None,
+        outcome: str | None = None,
+        pnl_usd: float | None = None,
+        exit_price: float | None = None,
     ) -> None:
         if not self._db:
             return
@@ -123,8 +133,9 @@ class StateStore:
             """INSERT OR REPLACE INTO orders
                (order_id, condition_id, token_id, side, price, size,
                 status, edge, kelly_fraction, p_hat, b_estimate,
-                confidence, market_question, placed_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                confidence, market_question, placed_at,
+                btc_open, btc_close, outcome, pnl_usd, exit_price)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 order_id,
                 condition_id,
@@ -140,6 +151,11 @@ class StateStore:
                 confidence,
                 market_question,
                 placed_at,
+                btc_open,
+                btc_close,
+                outcome,
+                pnl_usd,
+                exit_price,
             ),
         )
         await self._db.commit()

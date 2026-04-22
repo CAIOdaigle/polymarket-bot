@@ -347,7 +347,7 @@ class StrategyRunner:
         # Update stats snapshot for dashboard
         self._write_stats_snapshot()
 
-        # Log to state store
+        # Log to state store with full resolution details
         await self.state_store.log_trade(
             order_id=f"sniper-{window_ts}-{signal.strategy_name}",
             condition_id=f"btc-5m-{window_ts}",
@@ -363,6 +363,11 @@ class StrategyRunner:
             placed_at=time.time(),
             confidence=signal.confidence,
             market_question=f"BTC 5-min {signal.direction} ({signal.strategy_name})",
+            btc_open=window_open,
+            btc_close=btc_close,
+            outcome="WIN" if won else "LOSS",
+            pnl_usd=pnl,
+            exit_price=1.0 if won else 0.0,
         )
 
     @property
