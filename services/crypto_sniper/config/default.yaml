@@ -4,10 +4,10 @@ strategies:
 
 trading:
   dry_run: true
-  total_bankroll_usd: 50.0
+  total_bankroll_usd: 500.0
 
 ta_sniper:
-  mode: safe
+  mode: aggressive
   min_confidence: 0.30
   entry_seconds_before_close: 10
   min_ev_edge: 0.05
@@ -24,7 +24,7 @@ oracle_sniper:
 
 kelly:
   fraction: 0.25
-  min_bet_usd: 4.75
+  min_bet_usd: 1.00
 
 feeds:
   binance_ws_url: "wss://stream.binance.com:9443/ws/btcusdt@trade"
