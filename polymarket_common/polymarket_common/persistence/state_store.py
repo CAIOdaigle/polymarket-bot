@@ -76,7 +76,10 @@ class StateStore:
         await self._db.executescript(SCHEMA)
         await self._db.commit()
 
-        # Migrate existing DBs: add columns that may not exist yet
+        # Migrate existing DBs: add columns that may not exist yet.
+        # spot_open/spot_close are the asset-agnostic successors to
+        # btc_open/btc_close (the old names were misleading and hid a bug
+        # where ETH trades were accidentally resolved against BTC prices).
         for col, col_type in [
             ("confidence", "REAL"),
             ("market_question", "TEXT"),
@@ -86,6 +89,8 @@ class StateStore:
             ("pnl_usd", "REAL"),
             ("exit_price", "REAL"),
             ("estimated_price", "REAL"),
+            ("spot_open", "REAL"),
+            ("spot_close", "REAL"),
         ]:
             try:
                 await self._db.execute(
@@ -94,6 +99,23 @@ class StateStore:
                 await self._db.commit()
             except Exception:
                 pass  # Column already exists
+
+        # One-time backfill: copy legacy btc_open/btc_close into spot_open/spot_close
+        # for any rows that haven't been copied yet. Safe to re-run.
+        try:
+            await self._db.execute(
+                """UPDATE orders
+                   SET spot_open = btc_open
+                   WHERE spot_open IS NULL AND btc_open IS NOT NULL"""
+            )
+            await self._db.execute(
+                """UPDATE orders
+                   SET spot_close = btc_close
+                   WHERE spot_close IS NULL AND btc_close IS NOT NULL"""
+            )
+            await self._db.commit()
+        except Exception:
+            logger.debug("spot_* backfill skipped", exc_info=True)
 
         # Migrate positions table
         try:
@@ -128,17 +150,30 @@ class StateStore:
         pnl_usd: float | None = None,
         exit_price: float | None = None,
         estimated_price: float | None = None,
+        spot_open: float | None = None,
+        spot_close: float | None = None,
     ) -> None:
         if not self._db:
             return
+        # Keep the old btc_* columns populated for backwards compatibility
+        # when callers pass the new spot_* names. (New runners only pass spot_*.)
+        if btc_open is None and spot_open is not None:
+            btc_open = spot_open
+        if btc_close is None and spot_close is not None:
+            btc_close = spot_close
+        if spot_open is None and btc_open is not None:
+            spot_open = btc_open
+        if spot_close is None and btc_close is not None:
+            spot_close = btc_close
+
         await self._db.execute(
             """INSERT OR REPLACE INTO orders
                (order_id, condition_id, token_id, side, price, size,
                 status, edge, kelly_fraction, p_hat, b_estimate,
                 confidence, market_question, placed_at,
                 btc_open, btc_close, outcome, pnl_usd, exit_price,
-                estimated_price)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                estimated_price, spot_open, spot_close)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 order_id,
                 condition_id,
@@ -160,6 +195,8 @@ class StateStore:
                 pnl_usd,
                 exit_price,
                 estimated_price,
+                spot_open,
+                spot_close,
             ),
         )
         await self._db.commit()

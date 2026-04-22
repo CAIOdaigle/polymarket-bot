@@ -41,7 +41,10 @@ def _get_recent_trades(limit: int = 50) -> list[dict]:
         rows = conn.execute(
             """SELECT order_id, condition_id, token_id, side, price, size,
                       status, edge, p_hat, confidence, market_question,
-                      placed_at, btc_open, btc_close, outcome, pnl_usd,
+                      placed_at,
+                      COALESCE(spot_open, btc_open) AS spot_open,
+                      COALESCE(spot_close, btc_close) AS spot_close,
+                      outcome, pnl_usd,
                       exit_price, estimated_price
                FROM orders
                WHERE order_id LIKE 'sniper-%'
@@ -116,16 +119,21 @@ def _get_recent_trades(limit: int = 50) -> list[dict]:
             else:
                 t["exit_fmt"] = "—"
 
-            # BTC reference prices
-            btc_o = t.get("btc_open")
-            btc_c = t.get("btc_close")
-            t["btc_open_fmt"] = f"${btc_o:,.2f}" if btc_o else "—"
-            t["btc_close_fmt"] = f"${btc_c:,.2f}" if btc_c else "—"
-            if btc_o and btc_c:
-                move = btc_c - btc_o
-                t["btc_move_fmt"] = f"{'+' if move >= 0 else ''}{move:,.2f}"
+            # Spot price at window open/close (the underlying asset's price,
+            # NOT always BTC — misleadingly named in pre-fix schema).
+            so = t.get("spot_open")
+            sc = t.get("spot_close")
+            t["spot_open_fmt"] = f"${so:,.2f}" if so else "—"
+            t["spot_close_fmt"] = f"${sc:,.2f}" if sc else "—"
+            if so and sc:
+                move = sc - so
+                t["spot_move_fmt"] = f"{'+' if move >= 0 else ''}{move:,.2f}"
             else:
-                t["btc_move_fmt"] = "—"
+                t["spot_move_fmt"] = "—"
+            # Back-compat keys (old template references)
+            t["btc_open_fmt"] = t["spot_open_fmt"]
+            t["btc_close_fmt"] = t["spot_close_fmt"]
+            t["btc_move_fmt"] = t["spot_move_fmt"]
 
             # Outcome & PnL
             outcome = t.get("outcome") or ""

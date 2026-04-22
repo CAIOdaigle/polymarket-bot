@@ -24,6 +24,47 @@ from crypto_sniper.strategies.oracle_sniper import OracleSniperStrategy
 logger = logging.getLogger(__name__)
 
 
+# Expected plausible spot-price ranges per asset.
+# If the initial Binance price falls outside the range for the configured
+# asset, we abort instead of trading with a misconfigured feed (this is
+# exactly the bug that caused ETH trades to resolve against BTC prices).
+ASSET_SPOT_RANGES: dict[str, tuple[float, float]] = {
+    "BTC": (10_000.0, 500_000.0),
+    "ETH": (200.0, 20_000.0),
+    "SOL": (5.0, 2_000.0),
+}
+
+
+def _verify_feed_matches_asset(asset: str, spot_price: float | None) -> None:
+    """Hard stop if the live spot price is inconsistent with the asset config.
+
+    Raises SystemExit with a clear message rather than allowing the strategy
+    to run with contaminated price data.
+    """
+    if spot_price is None or spot_price <= 0:
+        raise SystemExit(
+            f"Spot price unavailable for asset={asset}. Feed is not healthy — aborting."
+        )
+    rng = ASSET_SPOT_RANGES.get(asset.upper())
+    if rng is None:
+        logger.warning(
+            "No expected price range defined for asset=%s — skipping sanity check",
+            asset,
+        )
+        return
+    low, high = rng
+    if not (low <= spot_price <= high):
+        raise SystemExit(
+            f"SANITY CHECK FAILED: {asset} spot price ${spot_price:.2f} is outside "
+            f"expected range [${low:.0f}, ${high:.0f}]. This usually means the "
+            f"Binance feed is pointing at the wrong symbol. Aborting before trades."
+        )
+    logger.info(
+        "Feed sanity OK: %s spot $%.2f is within expected range [$%.0f, $%.0f]",
+        asset, spot_price, low, high,
+    )
+
+
 async def run() -> None:
     config = load_sniper_config()
     setup_logging(config.logging)
@@ -59,6 +100,11 @@ async def run() -> None:
     # Feed manager
     feed_mgr = FeedManager(config)
     await feed_mgr.start()
+
+    # CRITICAL: verify the feed is returning prices consistent with our asset.
+    # This catches the "ETH container pulling BTC data" class of bug BEFORE
+    # any bets are placed against a mismatched market.
+    _verify_feed_matches_asset(config.asset, feed_mgr.get_latest_price())
 
     # Strategy runner
     runner = StrategyRunner(

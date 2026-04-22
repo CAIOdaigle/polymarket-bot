@@ -216,9 +216,9 @@
                         <th>Bet</th>
                         <th>Net PnL</th>
                         <th>Outcome</th>
-                        <th>BTC Open</th>
-                        <th>BTC Close</th>
-                        <th>BTC Δ</th>
+                        <th>Spot Open</th>
+                        <th>Spot Close</th>
+                        <th>Spot Δ</th>
                         <th>Conf</th>
                         <th>EV Edge</th>
                         <th>Status</th>
@@ -242,9 +242,9 @@
                             {% elif t.outcome == 'LOSS' %}<span class="badge loss">LOSS</span>
                             {% else %}—{% endif %}
                         </td>
-                        <td class="mono">{{ t.btc_open_fmt }}</td>
-                        <td class="mono">{{ t.btc_close_fmt }}</td>
-                        <td class="mono">{{ t.btc_move_fmt }}</td>
+                        <td class="mono">{{ t.spot_open_fmt }}</td>
+                        <td class="mono">{{ t.spot_close_fmt }}</td>
+                        <td class="mono">{{ t.spot_move_fmt }}</td>
                         <td class="mono">{{ t.conf_fmt }}</td>
                         <td class="mono">{{ t.edge_pct }}</td>
                         <td>{{ t.status }}</td>
