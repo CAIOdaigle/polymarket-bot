@@ -11,6 +11,7 @@ from typing import Optional
 
 from crypto_sniper.config import TASniperConfig
 from crypto_sniper.feeds.feed_manager import FeedManager
+from crypto_sniper.market.discovery import MarketDiscovery
 from crypto_sniper.signals.technical import analyze, TAResult
 from crypto_sniper.signals.black_scholes import should_trade as ev_should_trade
 from crypto_sniper.strategies.base import BaseStrategy, TradeSignal
@@ -25,15 +26,23 @@ class TASniperStrategy(BaseStrategy):
     def __init__(self, config: TASniperConfig):
         self._config = config
         self._feed_mgr: Optional[FeedManager] = None
+        self._discovery: Optional[MarketDiscovery] = None
         self._prev_score: Optional[float] = None
 
-    async def initialize(self, feed_manager: FeedManager) -> None:
+    async def initialize(
+        self,
+        feed_manager: FeedManager,
+        discovery: Optional[MarketDiscovery] = None,
+    ) -> None:
         self._feed_mgr = feed_manager
+        self._discovery = discovery
         logger.info(
-            "TASniperStrategy initialized (mode=%s, min_conf=%.0f%%, ev_gate=%.0f%%)",
+            "TASniperStrategy initialized (mode=%s, min_conf=%.0f%%, "
+            "ev_gate=%.0f%%, real_prices=%s)",
             self._config.mode,
             self._config.min_confidence * 100,
             self._config.min_ev_edge * 100,
+            self._discovery is not None,
         )
 
     async def evaluate(
@@ -74,7 +83,23 @@ class TASniperStrategy(BaseStrategy):
         if not fired_spike and result.confidence < self._config.min_confidence:
             return None
 
-        # EV filter gate (Black-Scholes)
+        # Fetch REAL token price from Polymarket CLOB (best ask for our direction)
+        # No estimation fallback: if we can't get a real quote, we don't trade.
+        estimated_price = estimate_token_price(abs(result.window_delta_pct))
+        real_price: Optional[float] = None
+        if self._discovery is not None:
+            real_price = await self._discovery.get_live_token_price(
+                window_ts, result.direction
+            )
+
+        if real_price is None:
+            logger.info(
+                "No real market price for window %d dir=%s (est=%.3f) — skipping",
+                window_ts, result.direction, estimated_price,
+            )
+            return None
+
+        # EV filter gate (Black-Scholes) — compare model prob to REAL market price
         closes = [c.close for c in candles]
         direction_lower = result.direction.lower()
         trade_ok, edge, model_prob = ev_should_trade(
@@ -83,18 +108,17 @@ class TASniperStrategy(BaseStrategy):
             closes=closes,
             seconds_remaining=seconds_remaining,
             signal_direction=direction_lower,
+            market_price=real_price,
             min_ev_edge=self._config.min_ev_edge,
         )
 
         if not trade_ok:
-            logger.debug(
-                "EV filter blocked: edge=%.3f < %.3f",
-                edge, self._config.min_ev_edge,
+            logger.info(
+                "EV gate blocked %s: model=%.3f vs market=%.3f, edge=%.3f < %.3f",
+                result.direction, model_prob, real_price, edge,
+                self._config.min_ev_edge,
             )
             return None
-
-        # Estimate token price
-        token_price = estimate_token_price(abs(result.window_delta_pct))
 
         return TradeSignal(
             direction=result.direction,
@@ -103,7 +127,8 @@ class TASniperStrategy(BaseStrategy):
             strategy_name=self.name,
             window_ts=window_ts,
             ev_edge=edge,
-            token_price=token_price,
+            token_price=real_price,
+            estimated_price=estimated_price,
             components=result.components,
         )
 

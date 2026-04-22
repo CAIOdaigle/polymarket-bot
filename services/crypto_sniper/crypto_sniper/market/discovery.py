@@ -6,6 +6,7 @@ Uses Gamma API to fetch market details (token IDs, prices, condition ID).
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Optional
 
@@ -14,6 +15,7 @@ import aiohttp
 logger = logging.getLogger(__name__)
 
 GAMMA_API = "https://gamma-api.polymarket.com"
+CLOB_API = "https://clob.polymarket.com"
 WINDOW_SECONDS = 300
 
 
@@ -69,6 +71,7 @@ class MarketDiscovery:
             return None
 
         if not data or not isinstance(data, list) or len(data) == 0:
+            logger.debug("Gamma returned no events for slug %s", slug)
             return None
 
         event = data[0]
@@ -77,34 +80,106 @@ class MarketDiscovery:
             return None
 
         market = markets[0]
-        tokens = market.get("tokens", [])
 
-        up_token = next(
-            (t for t in tokens if t.get("outcome", "").upper() in ("UP", "YES")),
-            None,
-        )
-        down_token = next(
-            (t for t in tokens if t.get("outcome", "").upper() in ("DOWN", "NO")),
-            None,
-        )
+        # Gamma returns these as JSON-encoded STRINGS, not native lists:
+        #   outcomes:       '["Up", "Down"]'
+        #   clobTokenIds:   '["<token_up>", "<token_down>"]'
+        #   outcomePrices:  '["0.485", "0.515"]'  (mid/last, NOT best ask)
+        try:
+            outcomes = json.loads(market.get("outcomes", "[]"))
+            token_ids = json.loads(market.get("clobTokenIds", "[]"))
+            outcome_prices = json.loads(market.get("outcomePrices", "[]"))
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("Gamma market has malformed outcomes/tokens: %s", slug)
+            return None
 
-        if not up_token or not down_token:
+        if len(outcomes) != len(token_ids) or not outcomes:
+            return None
+
+        # Build outcome -> (token_id, gamma_price) map
+        outcome_map: dict[str, tuple[str, float]] = {}
+        for i, oc in enumerate(outcomes):
+            tid = token_ids[i] if i < len(token_ids) else ""
+            try:
+                px = float(outcome_prices[i]) if i < len(outcome_prices) else 0.5
+            except (ValueError, TypeError):
+                px = 0.5
+            outcome_map[oc.upper()] = (tid, px)
+
+        up_entry = outcome_map.get("UP") or outcome_map.get("YES")
+        down_entry = outcome_map.get("DOWN") or outcome_map.get("NO")
+        if not up_entry or not down_entry:
+            logger.warning(
+                "Gamma market missing UP/DOWN outcomes: %s (got %s)",
+                slug, list(outcome_map.keys()),
+            )
             return None
 
         result = {
-            "condition_id": market.get("conditionId", market.get("condition_id", "")),
-            "up_token": up_token.get("token_id"),
-            "down_token": down_token.get("token_id"),
-            "up_price": float(up_token.get("price", 0.5)),
-            "down_price": float(down_token.get("price", 0.5)),
-            "neg_risk": market.get("neg_risk", False),
-            "tick_size": float(market.get("minimum_tick_size", 0.01)),
+            "condition_id": market.get("conditionId", ""),
+            "up_token": up_entry[0],
+            "down_token": down_entry[0],
+            "up_price_mid": up_entry[1],      # Gamma mid-price (reference only)
+            "down_price_mid": down_entry[1],  # Gamma mid-price (reference only)
+            "neg_risk": market.get("negRisk", market.get("neg_risk", False)),
+            "tick_size": float(market.get("orderPriceMinTickSize",
+                                market.get("minimum_tick_size", 0.01)) or 0.01),
             "slug": slug,
             "window_ts": window_ts,
         }
 
         self._cache[window_ts] = result
         return result
+
+    async def get_best_ask(self, token_id: str) -> Optional[float]:
+        """Fetch the current best ASK price for a token from the Polymarket CLOB.
+
+        Best ask = the price you'd pay to BUY right now. This is the real
+        cost of entering the position — not an estimate.
+
+        Returns None on any error (strategy must skip the trade).
+        """
+        if not token_id:
+            return None
+        await self._ensure_session()
+        try:
+            url = f"{CLOB_API}/price"
+            async with self._session.get(
+                url,
+                params={"token_id": token_id, "side": "buy"},
+                timeout=aiohttp.ClientTimeout(total=3),
+            ) as resp:
+                if resp.status != 200:
+                    logger.debug("CLOB /price %s returned %d", token_id[:10], resp.status)
+                    return None
+                data = await resp.json()
+                price_str = data.get("price")
+                if price_str is None:
+                    return None
+                price = float(price_str)
+                if price <= 0 or price >= 1.0:
+                    return None
+                return price
+        except Exception:
+            logger.debug("Failed to fetch best-ask for %s", token_id[:10], exc_info=True)
+            return None
+
+    async def get_live_token_price(
+        self, window_ts: int, direction: str
+    ) -> Optional[float]:
+        """Convenience: fetch real best-ask for the UP or DOWN token of a window.
+
+        Returns None if market not yet available or CLOB query fails.
+        The strategy MUST skip the trade on None — no estimation fallback.
+        """
+        market = await self.get_market(window_ts)
+        if market is None:
+            return None
+        token_key = "up_token" if direction.upper() == "UP" else "down_token"
+        token_id = market.get(token_key)
+        if not token_id:
+            return None
+        return await self.get_best_ask(token_id)
 
     async def close(self) -> None:
         if self._session:

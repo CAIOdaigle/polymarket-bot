@@ -70,9 +70,10 @@ class StrategyRunner:
 
     async def run(self) -> None:
         """Main loop — runs until shutdown signal."""
-        # Initialize all strategies
+        # Initialize all strategies — pass both feed manager and market discovery
+        # so they can fetch REAL Polymarket prices (no estimation fallback).
         for strategy in self._strategies:
-            await strategy.initialize(self.feed_mgr)
+            await strategy.initialize(self.feed_mgr, self.discovery)
 
         # Setup signal handlers
         loop = asyncio.get_event_loop()
@@ -304,17 +305,27 @@ class StrategyRunner:
         window_open: float,
         bet_size: float,
     ) -> None:
-        """Check actual BTC outcome after window closes."""
+        """Check actual BTC outcome after window closes.
+
+        Resolution rule: BTC close = the close of the LAST 1-min candle whose
+        close_time_ms is at or just before window close. Using `c.close`
+        of that candle (NOT the next candle's close) avoids off-by-one.
+        """
         candles = await self.feed_mgr.get_candles(limit=10)
         close_time_ms = (window_ts + WINDOW_SECONDS) * 1000
 
+        # Find the candle whose close_time is closest to (but at or before) window close
         btc_close = None
+        best = None
         for c in candles:
-            if c.open_time <= close_time_ms <= c.close_time + 60000:
-                btc_close = c.close
-                break
+            if c.close_time <= close_time_ms + 5000:  # allow small drift
+                if best is None or c.close_time > best.close_time:
+                    best = c
+        if best is not None:
+            btc_close = best.close
 
         if btc_close is None:
+            # WS latest price as last resort (runner waits ~2s past close time)
             btc_close = self.feed_mgr.get_latest_price() or window_open
 
         actual = "UP" if btc_close >= window_open else "DOWN"
@@ -347,13 +358,15 @@ class StrategyRunner:
         # Update stats snapshot for dashboard
         self._write_stats_snapshot()
 
-        # Log to state store with full resolution details
+        # Log to state store with full resolution details.
+        # `price` is the REAL best-ask we would pay; `estimated_price` is the
+        # old piecewise-linear model kept only for comparison/audit.
         await self.state_store.log_trade(
             order_id=f"sniper-{window_ts}-{signal.strategy_name}",
             condition_id=f"btc-5m-{window_ts}",
             token_id="",
             side=f"BUY_{signal.direction}",
-            price=signal.token_price,
+            price=signal.token_price,  # REAL Polymarket best-ask
             size=bet_size / signal.token_price if signal.token_price > 0 else 0,
             status="dry_run" if self.config.trading.dry_run else "filled",
             edge=signal.ev_edge or 0.0,
@@ -368,6 +381,7 @@ class StrategyRunner:
             outcome="WIN" if won else "LOSS",
             pnl_usd=pnl,
             exit_price=1.0 if won else 0.0,
+            estimated_price=signal.estimated_price,
         )
 
     @property

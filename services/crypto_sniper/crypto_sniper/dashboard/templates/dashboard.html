@@ -92,6 +92,21 @@
         .status-live { background: #3fb95033; color: #3fb950; padding: 4px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; }
         .status-dry { background: #d2992233; color: #d29922; padding: 4px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; }
         .empty { text-align: center; color: #8b949e; padding: 40px 0; }
+        .banner {
+            background: #1f6feb1a;
+            border: 1px solid #1f6feb55;
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            color: #c9d1d9;
+        }
+        .banner.warn {
+            background: #d299221a;
+            border-color: #d2992255;
+        }
+        .banner strong { color: #58a6ff; }
+        .banner.warn strong { color: #d29922; }
     </style>
 </head>
 <body>
@@ -106,6 +121,19 @@
         </h1>
         <div class="time">Updated: {{ now }}</div>
     </div>
+
+    <div class="banner">
+        <strong>✓ Real Polymarket prices</strong> — every trade uses a live best-ask
+        from the CLOB (not an estimate). PnL reflects what you would actually earn
+        if this were live capital.
+    </div>
+    {% if legacy_count > 0 %}
+    <div class="banner warn">
+        <strong>⚠ {{ legacy_count }} legacy trades hidden</strong> — these were
+        recorded before the price-integrity fix and used estimated token prices.
+        Their PnL is <em>not</em> reliable and they're excluded from all stats below.
+    </div>
+    {% endif %}
 
     <div class="cards">
         <div class="card">
@@ -148,7 +176,9 @@
                         <th>Time (UTC)</th>
                         <th>Strategy</th>
                         <th>Dir</th>
-                        <th>Entry</th>
+                        <th title="Real Polymarket best-ask">Entry</th>
+                        <th title="Old piecewise-linear estimate (reference)">Est</th>
+                        <th title="Real vs estimated — how much worse the real market was">Δ</th>
                         <th>Exit</th>
                         <th>Bet</th>
                         <th>Net PnL</th>
@@ -167,7 +197,9 @@
                         <td class="mono">{{ t.placed_at_fmt }}</td>
                         <td>{{ t.strategy }}</td>
                         <td><span class="badge {{ t.direction }}">{{ t.side_display }}</span></td>
-                        <td class="mono">{{ t.entry_fmt }}</td>
+                        <td class="mono"><strong>{{ t.entry_fmt }}</strong></td>
+                        <td class="mono" style="color:#8b949e">{{ t.est_fmt }}</td>
+                        <td class="mono" style="color:#8b949e">{{ t.slippage_fmt }}</td>
                         <td class="mono">{{ t.exit_fmt }}</td>
                         <td class="mono">{{ t.size_display }}</td>
                         <td class="mono {{ t.pnl_class }}"><strong>{{ t.pnl_fmt }}</strong></td>

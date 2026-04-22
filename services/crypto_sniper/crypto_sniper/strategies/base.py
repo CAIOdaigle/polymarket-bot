@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from crypto_sniper.feeds.feed_manager import FeedManager
+    from crypto_sniper.market.discovery import MarketDiscovery
 
 
 @dataclass
@@ -19,7 +20,8 @@ class TradeSignal:
     strategy_name: str
     window_ts: int  # 5-min window start timestamp
     ev_edge: Optional[float] = None  # Black-Scholes EV edge (if applicable)
-    token_price: float = 0.50  # estimated token cost
+    token_price: float = 0.50  # REAL best-ask from Polymarket CLOB (what we'd pay)
+    estimated_price: float = 0.50  # piecewise-linear estimate (for comparison)
     components: dict = field(default_factory=dict)  # indicator breakdown
 
 
@@ -27,8 +29,12 @@ class BaseStrategy(ABC):
     """Abstract base class for all crypto sniper strategies."""
 
     @abstractmethod
-    async def initialize(self, feed_manager: FeedManager) -> None:
-        """Initialize the strategy with access to shared feeds."""
+    async def initialize(
+        self,
+        feed_manager: FeedManager,
+        discovery: "MarketDiscovery | None" = None,
+    ) -> None:
+        """Initialize the strategy with access to shared feeds and market discovery."""
         ...
 
     @abstractmethod

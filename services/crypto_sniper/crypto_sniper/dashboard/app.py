@@ -32,12 +32,17 @@ def _get_recent_trades(limit: int = 50) -> list[dict]:
     if not conn:
         return []
     try:
+        # Only show trades captured with the NEW real-price pipeline.
+        # Old contaminated rows (pre-fix) have estimated_price = NULL and
+        # used fake token prices. They're intentionally hidden.
         rows = conn.execute(
             """SELECT order_id, condition_id, token_id, side, price, size,
                       status, edge, p_hat, confidence, market_question,
-                      placed_at, btc_open, btc_close, outcome, pnl_usd, exit_price
+                      placed_at, btc_open, btc_close, outcome, pnl_usd,
+                      exit_price, estimated_price
                FROM orders
-               WHERE order_id LIKE 'sniper-%' OR condition_id LIKE 'btc-%'
+               WHERE (order_id LIKE 'sniper-%' OR condition_id LIKE 'btc-%')
+                 AND estimated_price IS NOT NULL
                ORDER BY placed_at DESC LIMIT ?""",
             (limit,),
         ).fetchall()
@@ -85,8 +90,15 @@ def _get_recent_trades(limit: int = 50) -> list[dict]:
             mq = t.get("market_question") or ""
             t["market_short"] = (mq[:60] + "…") if len(mq) > 60 else (mq or "—")
 
-            # Entry/exit token prices (binary market: resolves $1 win / $0 loss)
+            # Entry = REAL best-ask from Polymarket CLOB
+            # Estimated = what the old model would have said (for comparison)
             t["entry_fmt"] = f"${t['price']:.3f}" if t.get("price") else "—"
+            est = t.get("estimated_price")
+            t["est_fmt"] = f"${est:.3f}" if est else "—"
+            if est and t.get("price"):
+                t["slippage_fmt"] = f"{((t['price'] - est) / est * 100):+.1f}%"
+            else:
+                t["slippage_fmt"] = "—"
             exit_p = t.get("exit_price")
             if exit_p is not None:
                 t["exit_fmt"] = f"${exit_p:.2f}"
@@ -146,12 +158,31 @@ def _get_stats() -> dict:
 
 
 def _get_trade_count() -> int:
+    """Count only the NEW real-price trades."""
     conn = _get_db()
     if not conn:
         return 0
     try:
         row = conn.execute(
-            "SELECT COUNT(*) as n FROM orders WHERE order_id LIKE 'sniper-%'"
+            """SELECT COUNT(*) as n FROM orders
+               WHERE order_id LIKE 'sniper-%' AND estimated_price IS NOT NULL"""
+        ).fetchone()
+        return row["n"] or 0
+    except Exception:
+        return 0
+    finally:
+        conn.close()
+
+
+def _get_legacy_count() -> int:
+    """Count the old, contaminated, pre-fix trades (shown only in banner)."""
+    conn = _get_db()
+    if not conn:
+        return 0
+    try:
+        row = conn.execute(
+            """SELECT COUNT(*) as n FROM orders
+               WHERE order_id LIKE 'sniper-%' AND estimated_price IS NULL"""
         ).fetchone()
         return row["n"] or 0
     except Exception:
@@ -165,12 +196,14 @@ def dashboard():
     trades = _get_recent_trades(50)
     stats = _get_stats()
     trade_count = _get_trade_count()
+    legacy_count = _get_legacy_count()
 
     return render_template(
         "dashboard.html",
         trades=trades,
         stats=stats,
         trade_count=trade_count,
+        legacy_count=legacy_count,
         is_live=not stats.get("dry_run", True),
         now=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
     )

@@ -85,6 +85,7 @@ class StateStore:
             ("outcome", "TEXT"),
             ("pnl_usd", "REAL"),
             ("exit_price", "REAL"),
+            ("estimated_price", "REAL"),
         ]:
             try:
                 await self._db.execute(
@@ -126,6 +127,7 @@ class StateStore:
         outcome: str | None = None,
         pnl_usd: float | None = None,
         exit_price: float | None = None,
+        estimated_price: float | None = None,
     ) -> None:
         if not self._db:
             return
@@ -134,8 +136,9 @@ class StateStore:
                (order_id, condition_id, token_id, side, price, size,
                 status, edge, kelly_fraction, p_hat, b_estimate,
                 confidence, market_question, placed_at,
-                btc_open, btc_close, outcome, pnl_usd, exit_price)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                btc_open, btc_close, outcome, pnl_usd, exit_price,
+                estimated_price)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 order_id,
                 condition_id,
@@ -156,6 +159,7 @@ class StateStore:
                 outcome,
                 pnl_usd,
                 exit_price,
+                estimated_price,
             ),
         )
         await self._db.commit()

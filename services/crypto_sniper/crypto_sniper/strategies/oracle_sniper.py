@@ -27,8 +27,13 @@ class OracleSniperStrategy(BaseStrategy):
         self._feed_mgr: Optional[FeedManager] = None
         self._chainlink_feed = None
 
-    async def initialize(self, feed_manager: FeedManager) -> None:
+    async def initialize(
+        self,
+        feed_manager: FeedManager,
+        discovery=None,
+    ) -> None:
         self._feed_mgr = feed_manager
+        self._discovery = discovery
         self._chainlink_feed = await feed_manager.get_chainlink_feed()
         logger.info(
             "OracleSniperStrategy initialized (min_lag=%.2f, entry=%d-%ds)",
