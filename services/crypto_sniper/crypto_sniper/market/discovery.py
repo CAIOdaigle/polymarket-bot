@@ -131,38 +131,66 @@ class MarketDiscovery:
         self._cache[window_ts] = result
         return result
 
-    async def get_best_ask(self, token_id: str) -> Optional[float]:
-        """Fetch the current best ASK price for a token from the Polymarket CLOB.
+    async def get_best_ask(
+        self, token_id: str, min_size: float = 1.0
+    ) -> Optional[float]:
+        """Fetch the current best ASK price from the Polymarket CLOB order book.
 
-        Best ask = the price you'd pay to BUY right now. This is the real
-        cost of entering the position — not an estimate.
+        The ASK is the lowest price someone is willing to SELL at — i.e., the
+        price you'd pay to market-buy right now. Derived directly from the
+        `/book` endpoint (the `/price` endpoint has opaque semantics and
+        returns synthetic values we cannot trust).
 
-        Returns None on any error (strategy must skip the trade).
+        Returns None if:
+          - The book query fails
+          - The ask side is empty (no one is selling — cannot market-buy)
+          - The top ask has size < min_size (not enough depth to fill a small bet)
+
+        The strategy MUST skip the trade on None. No estimation fallback.
         """
         if not token_id:
             return None
         await self._ensure_session()
         try:
-            url = f"{CLOB_API}/price"
+            url = f"{CLOB_API}/book"
             async with self._session.get(
                 url,
-                params={"token_id": token_id, "side": "buy"},
+                params={"token_id": token_id},
                 timeout=aiohttp.ClientTimeout(total=3),
             ) as resp:
                 if resp.status != 200:
-                    logger.debug("CLOB /price %s returned %d", token_id[:10], resp.status)
+                    logger.debug("CLOB /book %s returned %d", token_id[:10], resp.status)
                     return None
-                data = await resp.json()
-                price_str = data.get("price")
-                if price_str is None:
-                    return None
-                price = float(price_str)
-                if price <= 0 or price >= 1.0:
-                    return None
-                return price
+                book = await resp.json()
         except Exception:
-            logger.debug("Failed to fetch best-ask for %s", token_id[:10], exc_info=True)
+            logger.debug("Failed to fetch book for %s", token_id[:10], exc_info=True)
             return None
+
+        asks = book.get("asks") or []
+        if not asks:
+            # Empty ask side — nobody's selling. We can't market-buy this token.
+            return None
+
+        # Polymarket returns asks in DESCENDING price order (highest first).
+        # Best ask (lowest price to buy) is the LAST entry.
+        # Scan from lowest to highest for the first level with sufficient size.
+        try:
+            sorted_asks = sorted(asks, key=lambda a: float(a["price"]))
+        except (KeyError, ValueError, TypeError):
+            return None
+
+        for level in sorted_asks:
+            try:
+                price = float(level["price"])
+                size = float(level["size"])
+            except (KeyError, ValueError, TypeError):
+                continue
+            if price <= 0 or price >= 1.0:
+                continue
+            if size < min_size:
+                continue
+            return price
+        return None
 
     async def get_live_token_price(
         self, window_ts: int, direction: str
