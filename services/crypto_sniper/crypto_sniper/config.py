@@ -67,12 +67,42 @@ class KellyConfig(BaseSettings):
 
 
 class FeedsConfig(BaseSettings):
-    """Exchange feed configuration."""
-    binance_ws_url: str = "wss://stream.binance.com:9443/ws/btcusdt@trade"
+    """Exchange feed configuration. binance_symbol/ws_url are derived
+    automatically from the top-level `asset` if not overridden."""
+    binance_ws_url: str = ""  # derived from asset if empty
     binance_rest_url: str = "https://api.binance.com/api/v3"
-    binance_symbol: str = "BTCUSDT"
+    binance_symbol: str = ""  # derived from asset if empty
 
     model_config = {"extra": "ignore"}
+
+
+# Asset-specific defaults for 5-min up/down markets
+ASSET_CONFIG: dict[str, dict] = {
+    "BTC": {
+        "binance_symbol": "BTCUSDT",
+        "slug_prefix": "btc-updown-5m",
+    },
+    "ETH": {
+        "binance_symbol": "ETHUSDT",
+        "slug_prefix": "eth-updown-5m",
+    },
+    "SOL": {
+        "binance_symbol": "SOLUSDT",
+        "slug_prefix": "sol-updown-5m",
+    },
+}
+
+
+def resolve_binance_symbol(asset: str) -> str:
+    return ASSET_CONFIG.get(asset.upper(), {}).get("binance_symbol", f"{asset.upper()}USDT")
+
+
+def resolve_slug_prefix(asset: str) -> str:
+    return ASSET_CONFIG.get(asset.upper(), {}).get("slug_prefix", f"{asset.lower()}-updown-5m")
+
+
+def resolve_ws_url(symbol: str) -> str:
+    return f"wss://stream.binance.com:9443/ws/{symbol.lower()}@trade"
 
 
 class StrategiesConfig(BaseSettings):
@@ -87,6 +117,7 @@ class SniperConfig:
     """Top-level config aggregating all sub-configs."""
     def __init__(
         self,
+        asset: str,
         polymarket: PolymarketConfig,
         trading: TradingConfig,
         slack: SlackConfig,
@@ -97,6 +128,8 @@ class SniperConfig:
         kelly: KellyConfig,
         feeds: FeedsConfig,
     ):
+        self.asset = asset.upper()
+        self.slug_prefix = resolve_slug_prefix(self.asset)
         self.polymarket = polymarket
         self.trading = trading
         self.slack = slack
@@ -127,7 +160,20 @@ def load_sniper_config(env: Optional[str] = None) -> SniperConfig:
 
     merged = _deep_merge(defaults, overrides)
 
+    # Asset selection: SNIPER_ASSET env var takes precedence over config YAML.
+    # Defaults to BTC for backward compatibility.
+    asset = os.getenv("SNIPER_ASSET", merged.get("asset", "BTC")).upper()
+
+    # Auto-derive binance symbol + WS URL from asset if feeds section
+    # didn't explicitly override them.
+    feeds_cfg = merged.get("feeds", {})
+    if not feeds_cfg.get("binance_symbol"):
+        feeds_cfg["binance_symbol"] = resolve_binance_symbol(asset)
+    if not feeds_cfg.get("binance_ws_url"):
+        feeds_cfg["binance_ws_url"] = resolve_ws_url(feeds_cfg["binance_symbol"])
+
     return SniperConfig(
+        asset=asset,
         polymarket=PolymarketConfig(),
         trading=TradingConfig(**merged.get("trading", {})),
         slack=SlackConfig(**merged.get("slack", {})),
@@ -136,5 +182,5 @@ def load_sniper_config(env: Optional[str] = None) -> SniperConfig:
         ta_sniper=TASniperConfig(**merged.get("ta_sniper", {})),
         oracle_sniper=OracleSniperConfig(**merged.get("oracle_sniper", {})),
         kelly=KellyConfig(**merged.get("kelly", {})),
-        feeds=FeedsConfig(**merged.get("feeds", {})),
+        feeds=FeedsConfig(**feeds_cfg),
     )

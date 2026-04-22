@@ -14,14 +14,33 @@ services:
       timeout: 10s
       retries: 3
 
-  crypto-sniper:
+  # BTC sniper — also hosts the shared multi-asset dashboard on port 5051.
+  crypto-sniper-btc:
     build:
       context: .
       dockerfile: services/crypto_sniper/Dockerfile
+    image: polymarket-bot-crypto-sniper
     restart: unless-stopped
     env_file: .env
+    environment:
+      - SNIPER_ASSET=BTC
+      - RUN_DASHBOARD=1
     ports:
       - "0.0.0.0:5051:5051"
+    volumes:
+      - shared-data:/app/data
+      - sniper-logs:/app/logs
+
+  # ETH sniper — no dashboard; just writes stats to the shared volume.
+  crypto-sniper-eth:
+    image: polymarket-bot-crypto-sniper
+    depends_on:
+      - crypto-sniper-btc
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - SNIPER_ASSET=ETH
+      - RUN_DASHBOARD=0
     volumes:
       - shared-data:/app/data
       - sniper-logs:/app/logs

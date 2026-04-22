@@ -28,6 +28,11 @@ async def run() -> None:
     config = load_sniper_config()
     setup_logging(config.logging)
 
+    logger.info(
+        "Crypto Sniper starting — asset=%s, slug_prefix=%s, binance=%s",
+        config.asset, config.slug_prefix, config.feeds.binance_symbol,
+    )
+
     # Safety check
     if not config.trading.dry_run:
         confirm = os.environ.get("CONFIRM_LIVE_TRADING", "").lower()

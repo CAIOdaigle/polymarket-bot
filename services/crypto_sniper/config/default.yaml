@@ -1,3 +1,7 @@
+# Which underlying asset to snipe. Supported: BTC, ETH, SOL.
+# Can be overridden via SNIPER_ASSET env var.
+asset: BTC
+
 strategies:
   ta_sniper: true
   oracle_sniper: false  # enable after validation

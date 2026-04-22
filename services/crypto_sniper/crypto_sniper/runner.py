@@ -51,7 +51,7 @@ class StrategyRunner:
         self.state_store = state_store
         self.slack = slack
         self.feed_mgr = feed_mgr
-        self.discovery = MarketDiscovery()
+        self.discovery = MarketDiscovery(slug_prefix=config.slug_prefix)
 
         self._strategies: list[BaseStrategy] = []
         self._shutdown_event = asyncio.Event()
@@ -61,7 +61,9 @@ class StrategyRunner:
         self._win_count = 0
         self._loss_count = 0
         self._traded_windows: set[int] = set()
-        self._stats_path = Path(os.environ.get("SNIPER_DATA_DIR", "/app/data")) / "sniper_stats.json"
+        self._asset = config.asset.lower()  # e.g. "btc", "eth"
+        stats_dir = Path(os.environ.get("SNIPER_DATA_DIR", "/app/data"))
+        self._stats_path = stats_dir / f"sniper_stats_{self._asset}.json"
         self._write_stats_snapshot()
 
     def register(self, strategy: BaseStrategy) -> None:
@@ -361,9 +363,10 @@ class StrategyRunner:
         # Log to state store with full resolution details.
         # `price` is the REAL best-ask we would pay; `estimated_price` is the
         # old piecewise-linear model kept only for comparison/audit.
+        asset_up = self._asset.upper()
         await self.state_store.log_trade(
-            order_id=f"sniper-{window_ts}-{signal.strategy_name}",
-            condition_id=f"btc-5m-{window_ts}",
+            order_id=f"sniper-{self._asset}-{window_ts}-{signal.strategy_name}",
+            condition_id=f"{self._asset}-5m-{window_ts}",
             token_id="",
             side=f"BUY_{signal.direction}",
             price=signal.token_price,  # REAL Polymarket best-ask
@@ -375,7 +378,7 @@ class StrategyRunner:
             b_estimate=0.0,
             placed_at=time.time(),
             confidence=signal.confidence,
-            market_question=f"BTC 5-min {signal.direction} ({signal.strategy_name})",
+            market_question=f"{asset_up} 5-min {signal.direction} ({signal.strategy_name})",
             btc_open=window_open,
             btc_close=btc_close,
             outcome="WIN" if won else "LOSS",
@@ -416,7 +419,10 @@ class StrategyRunner:
         try:
             self._stats_path.parent.mkdir(parents=True, exist_ok=True)
             snapshot = self.stats
-            snapshot["btc_price"] = self.feed_mgr.get_latest_price()
+            snapshot["asset"] = self._asset.upper()
+            snapshot["spot_price"] = self.feed_mgr.get_latest_price()
+            # Keep btc_price for backward compatibility with older dashboards
+            snapshot["btc_price"] = snapshot["spot_price"]
             snapshot["dry_run"] = self.config.trading.dry_run
             snapshot["updated_at"] = time.time()
             self._stats_path.write_text(json.dumps(snapshot, indent=2))

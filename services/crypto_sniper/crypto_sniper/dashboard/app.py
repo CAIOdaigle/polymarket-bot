@@ -13,7 +13,10 @@ from flask import Flask, jsonify, render_template
 # Writable data dir (shared volume in Docker)
 DATA_DIR = Path(os.environ.get("SNIPER_DATA_DIR", "/app/data"))
 DB_PATH = DATA_DIR / "bot.db"
-STATS_PATH = DATA_DIR / "sniper_stats.json"
+
+# Assets supported by the multi-asset dashboard. Each asset writes its own
+# sniper_stats_{asset}.json snapshot from the runner process.
+SUPPORTED_ASSETS = ["BTC", "ETH", "SOL"]
 
 app = Flask(__name__, template_folder=str(Path(__file__).parent / "templates"))
 
@@ -41,7 +44,7 @@ def _get_recent_trades(limit: int = 50) -> list[dict]:
                       placed_at, btc_open, btc_close, outcome, pnl_usd,
                       exit_price, estimated_price
                FROM orders
-               WHERE (order_id LIKE 'sniper-%' OR condition_id LIKE 'btc-%')
+               WHERE order_id LIKE 'sniper-%'
                  AND estimated_price IS NOT NULL
                ORDER BY placed_at DESC LIMIT ?""",
             (limit,),
@@ -57,12 +60,20 @@ def _get_recent_trades(limit: int = 50) -> list[dict]:
                 else "—"
             )
 
-            # Extract strategy from order_id: "sniper-<window_ts>-<strategy>"
+            # Extract asset + strategy from order_id.
+            # New format:    "sniper-<asset>-<window_ts>-<strategy>"  (4+ parts)
+            # Legacy format: "sniper-<window_ts>-<strategy>"          (3 parts)
             oid = t.get("order_id") or ""
-            if oid.startswith("sniper-"):
-                parts = oid.split("-", 2)
-                t["strategy"] = parts[2] if len(parts) > 2 else "unknown"
+            parts = oid.split("-") if oid.startswith("sniper-") else []
+            if len(parts) >= 4 and not parts[1].isdigit():
+                t["asset"] = parts[1].upper()
+                t["strategy"] = "-".join(parts[3:]) or "unknown"
+            elif len(parts) >= 3:
+                # legacy BTC-only rows
+                t["asset"] = "BTC"
+                t["strategy"] = "-".join(parts[2:]) or "unknown"
             else:
+                t["asset"] = "?"
                 t["strategy"] = "—"
 
             # Direction display
@@ -136,24 +147,59 @@ def _get_recent_trades(limit: int = 50) -> list[dict]:
         conn.close()
 
 
-def _get_stats() -> dict:
-    """Read runtime stats snapshot written by StrategyRunner."""
-    if STATS_PATH.exists():
+def _get_all_stats() -> list[dict]:
+    """Return a per-asset stats snapshot for every runner that is writing a
+    sniper_stats_{asset}.json file. Unknown assets are silently ignored.
+    """
+    out: list[dict] = []
+    for asset in SUPPORTED_ASSETS:
+        path = DATA_DIR / f"sniper_stats_{asset.lower()}.json"
+        if not path.exists():
+            continue
         try:
-            return json.loads(STATS_PATH.read_text())
+            data = json.loads(path.read_text())
+            data.setdefault("asset", asset)
+            out.append(data)
         except Exception:
-            pass
+            continue
+
+    # Legacy single-file fallback (pre-multi-asset)
+    if not out:
+        legacy = DATA_DIR / "sniper_stats.json"
+        if legacy.exists():
+            try:
+                data = json.loads(legacy.read_text())
+                data.setdefault("asset", "BTC")
+                out.append(data)
+            except Exception:
+                pass
+    return out
+
+
+def _aggregate_stats(per_asset: list[dict]) -> dict:
+    """Sum-up view across all assets for the header cards."""
+    if not per_asset:
+        return {
+            "bankroll": 0.0, "starting_bankroll": 0.0, "pnl": 0.0,
+            "trades": 0, "wins": 0, "losses": 0, "win_rate": 0.0,
+            "dry_run": True, "asset_count": 0,
+        }
+    total_bankroll = sum(s.get("bankroll", 0) for s in per_asset)
+    starting = sum(s.get("starting_bankroll", 0) for s in per_asset)
+    wins = sum(s.get("wins", 0) for s in per_asset)
+    losses = sum(s.get("losses", 0) for s in per_asset)
+    trades = sum(s.get("trades", 0) for s in per_asset)
+    total = wins + losses
     return {
-        "bankroll": 0.0,
-        "starting_bankroll": 0.0,
-        "pnl": 0.0,
-        "trades": 0,
-        "wins": 0,
-        "losses": 0,
-        "win_rate": 0.0,
-        "btc_price": None,
-        "dry_run": True,
-        "updated_at": None,
+        "bankroll": round(total_bankroll, 2),
+        "starting_bankroll": round(starting, 2),
+        "pnl": round(total_bankroll - starting, 2),
+        "trades": trades,
+        "wins": wins,
+        "losses": losses,
+        "win_rate": (wins / total) if total else 0.0,
+        "dry_run": any(s.get("dry_run", True) for s in per_asset),
+        "asset_count": len(per_asset),
     }
 
 
@@ -194,17 +240,19 @@ def _get_legacy_count() -> int:
 @app.route("/")
 def dashboard():
     trades = _get_recent_trades(50)
-    stats = _get_stats()
+    per_asset_stats = _get_all_stats()
+    totals = _aggregate_stats(per_asset_stats)
     trade_count = _get_trade_count()
     legacy_count = _get_legacy_count()
 
     return render_template(
         "dashboard.html",
         trades=trades,
-        stats=stats,
+        stats=totals,
+        per_asset=per_asset_stats,
         trade_count=trade_count,
         legacy_count=legacy_count,
-        is_live=not stats.get("dry_run", True),
+        is_live=not totals.get("dry_run", True),
         now=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
     )
 
@@ -216,7 +264,10 @@ def api_trades():
 
 @app.route("/api/stats")
 def api_stats():
-    return jsonify(_get_stats())
+    return jsonify({
+        "totals": _aggregate_stats(_get_all_stats()),
+        "per_asset": _get_all_stats(),
+    })
 
 
 if __name__ == "__main__":

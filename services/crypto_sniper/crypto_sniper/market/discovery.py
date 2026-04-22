@@ -34,9 +34,14 @@ def seconds_until_close(window_ts: int) -> float:
 
 
 class MarketDiscovery:
-    """Fetches and caches Polymarket BTC binary market data."""
+    """Fetches and caches Polymarket 5-min up/down binary market data.
 
-    def __init__(self):
+    Parameterized by slug_prefix so the same class works for BTC, ETH, SOL, etc.
+    E.g. slug_prefix='btc-updown-5m' → slug 'btc-updown-5m-{window_ts}'.
+    """
+
+    def __init__(self, slug_prefix: str = "btc-updown-5m"):
+        self._slug_prefix = slug_prefix
         self._cache: dict[int, dict] = {}
         self._session: Optional[aiohttp.ClientSession] = None
 
@@ -55,7 +60,7 @@ class MarketDiscovery:
 
         await self._ensure_session()
 
-        slug = f"btc-updown-5m-{window_ts}"
+        slug = f"{self._slug_prefix}-{window_ts}"
         try:
             url = f"{GAMMA_API}/events"
             async with self._session.get(
