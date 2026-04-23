@@ -1,18 +1,17 @@
 services:
+  # polymarket-bot (Bayesian/LMSR event trader) is intentionally disabled.
+  # It lives under `profiles: [legacy]` so `docker compose up` does NOT
+  # bring it back. Run explicitly with `--profile legacy` when needed.
   polymarket-bot:
     build: .
-    restart: unless-stopped
+    profiles: ["legacy"]
+    restart: "no"
     env_file: .env
     ports:
       - "0.0.0.0:5050:5050"
     volumes:
       - shared-data:/app/data
       - bot-logs:/app/logs
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5050/')"]
-      interval: 60s
-      timeout: 10s
-      retries: 3
 
   # BTC sniper — also hosts the shared multi-asset dashboard on port 5051.
   crypto-sniper-btc:
