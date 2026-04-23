@@ -5,18 +5,36 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request
 
 # Writable data dir (shared volume in Docker)
 DATA_DIR = Path(os.environ.get("SNIPER_DATA_DIR", "/app/data"))
 DB_PATH = DATA_DIR / "bot.db"
+CALIBRATION_PATH = DATA_DIR / "calibration.json"
 
 # Assets supported by the multi-asset dashboard. Each asset writes its own
 # sniper_stats_{asset}.json snapshot from the runner process.
 SUPPORTED_ASSETS = ["BTC", "ETH", "SOL"]
+
+# Mirror of ConfidenceCalibrator.MIN_SAMPLES_PER_BUCKET from sizing/calibration.py.
+# Kept as a local constant to keep the dashboard package dependency-free
+# (doesn't need to import from sizing/ which pulls in more modules).
+MIN_SAMPLES_PER_BUCKET = 20
+
+
+def _iso_utc(ts: float | None) -> str | None:
+    """Epoch seconds -> ISO 8601 UTC string with trailing 'Z'.
+
+    The client-side JS uses this with Intl.DateTimeFormat to render each
+    timestamp in the user's selected timezone. Returning ISO strings (not
+    pre-formatted) is what makes the TZ picker work without server restarts.
+    """
+    if ts is None:
+        return None
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 app = Flask(__name__, template_folder=str(Path(__file__).parent / "templates"))
 
@@ -55,6 +73,9 @@ def _get_recent_trades(limit: int = 50) -> list[dict]:
         trades = []
         for r in rows:
             t = dict(r)
+            # Keep the pre-formatted UTC string as a fallback, but also emit an
+            # ISO 8601 UTC string that the client-side TZ picker re-renders
+            # in the user's chosen timezone.
             t["placed_at_fmt"] = (
                 datetime.fromtimestamp(t["placed_at"], tz=timezone.utc).strftime(
                     "%Y-%m-%d %H:%M:%S"
@@ -62,6 +83,7 @@ def _get_recent_trades(limit: int = 50) -> list[dict]:
                 if t.get("placed_at")
                 else "—"
             )
+            t["iso_ts"] = _iso_utc(t.get("placed_at"))
 
             # Extract asset + strategy from order_id.
             # New format:    "sniper-<asset>-<window_ts>-<strategy>"  (4+ parts)
@@ -228,6 +250,102 @@ def _get_trade_count() -> int:
         conn.close()
 
 
+def _get_calibration() -> dict:
+    """Load calibration.json written by sizing/calibration.py.
+
+    Annotates each bucket with:
+      - `gap`: empirical - mean(stated_min, stated_max)
+      - `status`: 'locked' | 'active' | 'unprofitable'
+        - 'locked'        -> n < MIN_SAMPLES_PER_BUCKET (Kelly capped at 0.55)
+        - 'active'        -> n >= MIN and empirical >= 0.50
+        - 'unprofitable'  -> n >= MIN and empirical <  0.50 (Kelly returns 0)
+
+    Returns an empty skeleton if the file doesn't exist yet (first run).
+    """
+    skeleton = {"generated_at_iso": None, "total_trades": 0, "by_asset": {}}
+    if not CALIBRATION_PATH.exists():
+        return skeleton
+    try:
+        raw = json.loads(CALIBRATION_PATH.read_text())
+    except Exception:
+        app.logger.exception("Failed to parse calibration.json")
+        return skeleton
+
+    out: dict = {
+        "generated_at": raw.get("generated_at"),
+        "generated_at_iso": _iso_utc(raw.get("generated_at")),
+        "total_trades": raw.get("total_trades", 0),
+        "by_asset": {},
+    }
+    for asset, buckets in (raw.get("by_asset") or {}).items():
+        enriched = []
+        for b in buckets:
+            n = int(b.get("n", 0))
+            empirical = float(b.get("empirical", 0.0))
+            stated_mid = (float(b.get("stated_min", 0)) + float(b.get("stated_max", 0))) / 2
+            gap = empirical - stated_mid
+            if n < MIN_SAMPLES_PER_BUCKET:
+                status = "locked"
+            elif empirical >= 0.50:
+                status = "active"
+            else:
+                status = "unprofitable"
+            enriched.append({
+                "stated_min": b.get("stated_min"),
+                "stated_max": b.get("stated_max"),
+                "empirical": empirical,
+                "gap": round(gap, 4),
+                "n": n,
+                "status": status,
+            })
+        out["by_asset"][asset] = enriched
+    return out
+
+
+def _get_pnl_series(days: int = 7) -> dict[str, list[dict]]:
+    """Return cumulative PnL timeseries per asset for the last `days` days.
+
+    Structure: {'BTC': [{'t': iso, 'cumulative_pnl': 12.34}, ...], 'ETH': [...]}
+    One data point per resolved trade, ordered chronologically.
+    """
+    out: dict[str, list[dict]] = {}
+    conn = _get_db()
+    if not conn:
+        return out
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
+        rows = conn.execute(
+            """SELECT order_id, placed_at, pnl_usd
+               FROM orders
+               WHERE order_id LIKE 'sniper-%'
+                 AND estimated_price IS NOT NULL
+                 AND pnl_usd IS NOT NULL
+                 AND placed_at >= ?
+               ORDER BY placed_at ASC""",
+            (cutoff,),
+        ).fetchall()
+    except Exception:
+        app.logger.exception("Failed to load pnl series")
+        return out
+    finally:
+        conn.close()
+
+    running: dict[str, float] = {}
+    for r in rows:
+        oid = r["order_id"] or ""
+        parts = oid.split("-")
+        if len(parts) >= 4 and not parts[1].isdigit():
+            asset = parts[1].upper()
+        else:
+            asset = "BTC"  # legacy rows
+        running[asset] = running.get(asset, 0.0) + float(r["pnl_usd"] or 0)
+        out.setdefault(asset, []).append({
+            "t": _iso_utc(r["placed_at"]),
+            "cumulative_pnl": round(running[asset], 4),
+        })
+    return out
+
+
 def _get_legacy_count() -> int:
     """Count the old, contaminated, pre-fix trades (shown only in banner)."""
     conn = _get_db()
@@ -252,6 +370,8 @@ def dashboard():
     totals = _aggregate_stats(per_asset_stats)
     trade_count = _get_trade_count()
     legacy_count = _get_legacy_count()
+    calibration = _get_calibration()
+    now = datetime.now(timezone.utc)
 
     return render_template(
         "dashboard.html",
@@ -260,8 +380,11 @@ def dashboard():
         per_asset=per_asset_stats,
         trade_count=trade_count,
         legacy_count=legacy_count,
+        calibration=calibration,
         is_live=not totals.get("dry_run", True),
-        now=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+        now=now.strftime("%Y-%m-%d %H:%M:%S UTC"),
+        now_iso=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        min_samples=MIN_SAMPLES_PER_BUCKET,
     )
 
 
@@ -276,6 +399,25 @@ def api_stats():
         "totals": _aggregate_stats(_get_all_stats()),
         "per_asset": _get_all_stats(),
     })
+
+
+@app.route("/api/calibration")
+def api_calibration():
+    return jsonify(_get_calibration())
+
+
+@app.route("/api/pnl_series")
+def api_pnl_series():
+    """Cumulative PnL timeseries per asset.
+
+    Query params:
+      days (int, default 7) — clamped to [1, 90]
+    """
+    try:
+        days = max(1, min(90, int(request.args.get("days", "7"))))
+    except ValueError:
+        days = 7
+    return jsonify({"days": days, "series": _get_pnl_series(days=days)})
 
 
 if __name__ == "__main__":

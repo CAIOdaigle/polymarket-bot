@@ -4,7 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Crypto Sniper Dashboard — Multi-Asset</title>
-    <meta http-equiv="refresh" content="15">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -20,13 +21,38 @@
             margin-bottom: 24px;
             padding-bottom: 16px;
             border-bottom: 1px solid #30363d;
+            gap: 16px;
+            flex-wrap: wrap;
         }
         .header h1 { font-size: 24px; font-weight: 600; }
         .header h1 .tag {
             background: #f7931a; color: #000; padding: 2px 8px;
             border-radius: 4px; font-size: 12px; margin-left: 8px; vertical-align: middle;
         }
-        .header .time { color: #8b949e; font-size: 14px; }
+        .header-controls {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: #8b949e;
+            font-size: 13px;
+            flex-wrap: wrap;
+        }
+        .header-controls label { color: #8b949e; font-size: 12px; }
+        .ctrl-btn, .ctrl-select {
+            background: #161b22;
+            border: 1px solid #30363d;
+            color: #c9d1d9;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        .ctrl-btn:hover { background: #21262d; border-color: #8b949e; }
+        .ctrl-btn.active { background: #1f6feb33; border-color: #58a6ff; color: #58a6ff; }
+        .refresh-status { color: #8b949e; font-size: 12px; font-variant-numeric: tabular-nums; }
+        .tz-label { color: #6e7681; font-size: 11px; margin-left: 4px; font-variant-numeric: normal; }
+
         .cards {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -60,7 +86,11 @@
             margin-bottom: 16px;
             padding-bottom: 8px;
             border-bottom: 1px solid #30363d;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
+        .section h2 .sub { font-size: 12px; color: #8b949e; font-weight: 400; }
         table { width: 100%; border-collapse: collapse; font-size: 13px; }
         th {
             text-align: left;
@@ -86,9 +116,13 @@
         .badge.unknown { background: #30363d; color: #8b949e; }
         .badge.win { background: #3fb95033; color: #3fb950; }
         .badge.loss { background: #f8514933; color: #f85149; }
+        .badge.locked { background: #484f5833; color: #8b949e; }
+        .badge.active { background: #3fb95033; color: #3fb950; }
+        .badge.unprofitable { background: #f8514933; color: #f85149; }
         .mono { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum'; }
         .green { color: #3fb950; }
         .red { color: #f85149; }
+        .yellow { color: #d29922; }
         .status-live { background: #3fb95033; color: #3fb950; padding: 4px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; }
         .status-dry { background: #d2992233; color: #d29922; padding: 4px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; }
         .empty { text-align: center; color: #8b949e; padding: 40px 0; }
@@ -107,6 +141,48 @@
         }
         .banner strong { color: #58a6ff; }
         .banner.warn strong { color: #d29922; }
+
+        .filter-bar {
+            display: flex;
+            gap: 16px;
+            align-items: center;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+        .filter-group { display: flex; gap: 4px; align-items: center; }
+        .filter-group-label { color: #6e7681; font-size: 11px; text-transform: uppercase; margin-right: 4px; }
+        .filter-search {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            color: #e6edf3;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            width: 200px;
+            font-family: inherit;
+        }
+        .filter-search:focus { outline: none; border-color: #58a6ff; }
+
+        .chart-wrap { position: relative; height: 280px; }
+        .calibration-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+            gap: 16px;
+        }
+        .calibration-card {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 12px 16px;
+        }
+        .calibration-card h3 {
+            font-size: 13px;
+            margin-bottom: 8px;
+            color: #e6edf3;
+            font-weight: 600;
+        }
+        .calibration-card table { font-size: 12px; }
+        .calibration-card td, .calibration-card th { padding: 6px 8px; }
     </style>
 </head>
 <body>
@@ -120,7 +196,26 @@
                 <span class="status-dry">DRY RUN</span>
             {% endif %}
         </h1>
-        <div class="time">Updated: {{ now }}</div>
+        <div class="header-controls">
+            <label for="tz-picker">Timezone:</label>
+            <select id="tz-picker" class="ctrl-select">
+                <option value="auto">Auto (browser)</option>
+                <option value="America/Denver">US Mountain</option>
+                <option value="America/New_York">US Eastern</option>
+                <option value="America/Chicago">US Central</option>
+                <option value="America/Los_Angeles">US Pacific</option>
+                <option value="Europe/London">London</option>
+                <option value="Europe/Berlin">Berlin</option>
+                <option value="Asia/Singapore">Singapore</option>
+                <option value="Asia/Tokyo">Tokyo</option>
+                <option value="UTC">UTC</option>
+            </select>
+            <button id="refresh-toggle" class="ctrl-btn active" title="Pause / resume auto-refresh">⏸ Pause</button>
+            <button id="refresh-now" class="ctrl-btn" title="Refresh immediately">↻ Now</button>
+            <span class="refresh-status" id="refresh-status">
+                Updated <span data-iso="{{ now_iso }}" data-relative="1">just now</span> · next in 15s
+            </span>
+        </div>
     </div>
 
     <div class="banner">
@@ -139,7 +234,7 @@
     <div class="cards">
         <div class="card">
             <div class="label">Total Bankroll ({{ stats.asset_count }} assets)</div>
-            <div class="value {% if stats.pnl > 0 %}green{% elif stats.pnl < 0 %}red{% else %}blue{% endif %}">
+            <div class="value {% if stats.pnl > 0 %}green{% elif stats.pnl < 0 %}red{% else %}blue{% endif %}" id="card-bankroll">
                 ${{ "%.2f"|format(stats.bankroll) }}
             </div>
             <div class="sub">
@@ -160,6 +255,65 @@
             <div class="sub">{{ trade_count }} logged total</div>
         </div>
     </div>
+
+    <!-- Cumulative PnL chart -->
+    <div class="section">
+        <h2>
+            Cumulative PnL (7 days)
+            <span class="sub" id="pnl-chart-info">Loading…</span>
+        </h2>
+        <div class="chart-wrap">
+            <canvas id="pnl-chart"></canvas>
+        </div>
+    </div>
+
+    <!-- Calibration panel -->
+    {% if calibration.by_asset %}
+    <div class="section">
+        <h2>
+            Confidence Calibration
+            <span class="sub">
+                Rebuilt <span data-iso="{{ calibration.generated_at_iso }}" data-relative="1">—</span>
+                · min samples per bucket: {{ min_samples }}
+            </span>
+        </h2>
+        <div class="calibration-grid">
+        {% for asset, buckets in calibration.by_asset.items() %}
+            <div class="calibration-card">
+                <h3>{{ asset }}</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Stated</th>
+                            <th>Empirical</th>
+                            <th>Gap</th>
+                            <th>n</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {% for b in buckets %}
+                        <tr>
+                            <td class="mono">{{ "%.2f"|format(b.stated_min) }}–{{ "%.2f"|format(b.stated_max) }}</td>
+                            <td class="mono">{{ "%.1f"|format(b.empirical * 100) }}%</td>
+                            <td class="mono {% if b.gap|abs <= 0.05 %}green{% elif b.gap|abs <= 0.15 %}yellow{% else %}red{% endif %}">
+                                {% if b.gap >= 0 %}+{% endif %}{{ "%.1f"|format(b.gap * 100) }}%
+                            </td>
+                            <td class="mono">{{ b.n }}</td>
+                            <td>
+                                {% if b.status == 'locked' %}<span class="badge locked">🔒 locked</span>
+                                {% elif b.status == 'active' %}<span class="badge active">✓ active</span>
+                                {% else %}<span class="badge unprofitable">⚠ unprofitable</span>{% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% endfor %}
+        </div>
+    </div>
+    {% endif %}
 
     {% if per_asset %}
     <div class="section">
@@ -200,12 +354,39 @@
     {% endif %}
 
     <div class="section">
-        <h2>Recent Trades ({{ trades|length }})</h2>
+        <h2>
+            Recent Trades
+            <span class="sub"><span id="trades-count-visible">{{ trades|length }}</span> of {{ trades|length }} shown</span>
+        </h2>
+
+        <!-- Filter bar -->
+        <div class="filter-bar">
+            <div class="filter-group">
+                <span class="filter-group-label">Asset</span>
+                <button class="ctrl-btn filter-btn active" data-filter="asset" data-value="all">All</button>
+                <button class="ctrl-btn filter-btn" data-filter="asset" data-value="BTC">BTC</button>
+                <button class="ctrl-btn filter-btn" data-filter="asset" data-value="ETH">ETH</button>
+            </div>
+            <div class="filter-group">
+                <span class="filter-group-label">Outcome</span>
+                <button class="ctrl-btn filter-btn active" data-filter="outcome" data-value="all">All</button>
+                <button class="ctrl-btn filter-btn" data-filter="outcome" data-value="WIN">WIN</button>
+                <button class="ctrl-btn filter-btn" data-filter="outcome" data-value="LOSS">LOSS</button>
+            </div>
+            <div class="filter-group">
+                <span class="filter-group-label">Direction</span>
+                <button class="ctrl-btn filter-btn active" data-filter="direction" data-value="all">All</button>
+                <button class="ctrl-btn filter-btn" data-filter="direction" data-value="BUY_UP">UP</button>
+                <button class="ctrl-btn filter-btn" data-filter="direction" data-value="BUY_DOWN">DOWN</button>
+            </div>
+            <input type="text" class="filter-search" id="filter-search" placeholder="Search strategy / market…">
+        </div>
+
         {% if trades %}
-            <table>
+            <table id="trades-table">
                 <thead>
                     <tr>
-                        <th>Time (UTC)</th>
+                        <th>Time</th>
                         <th>Asset</th>
                         <th>Strategy</th>
                         <th>Dir</th>
@@ -226,8 +407,11 @@
                 </thead>
                 <tbody>
                 {% for t in trades %}
-                    <tr>
-                        <td class="mono">{{ t.placed_at_fmt }}</td>
+                    <tr data-asset="{{ t.asset }}"
+                        data-outcome="{{ t.outcome }}"
+                        data-direction="{{ t.side }}"
+                        data-search="{{ (t.strategy ~ ' ' ~ (t.market_question or ''))|lower }}">
+                        <td class="mono" data-iso="{{ t.iso_ts }}">{{ t.placed_at_fmt }}</td>
                         <td><strong>{{ t.asset }}</strong></td>
                         <td>{{ t.strategy }}</td>
                         <td><span class="badge {{ t.direction }}">{{ t.side_display }}</span></td>
@@ -256,5 +440,227 @@
             <div class="empty">No sniper trades yet. Waiting for the next 5-minute window...</div>
         {% endif %}
     </div>
+
+<script>
+// ============================================================================
+// Timezone handling (client-side)
+// Server emits UTC ISO 8601 strings in data-iso attributes; we reformat them
+// in the user's preferred timezone here. Preference persists in localStorage.
+// ============================================================================
+const TZ_KEY = 'sniper.tz';
+
+function effectiveTz() {
+    const stored = localStorage.getItem(TZ_KEY) || 'auto';
+    if (stored === 'auto') return Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return stored;
+}
+
+function formatInTz(iso, tz, opts) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    const baseOpts = { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+                       hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false };
+    return new Intl.DateTimeFormat('en-CA', { ...baseOpts, ...(opts || {}) }).format(d);
+}
+
+function tzAbbrev(tz) {
+    try {
+        const parts = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'short' })
+            .formatToParts(new Date());
+        const p = parts.find(p => p.type === 'timeZoneName');
+        return p ? p.value : tz;
+    } catch (_) { return tz; }
+}
+
+function relativeTime(iso) {
+    if (!iso) return '—';
+    const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+    if (diff < 60) return `${Math.floor(diff)}s ago`;
+    if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+    return `${Math.floor(diff/86400)}d ago`;
+}
+
+function applyTimezone() {
+    const tz = effectiveTz();
+    const abbrev = tzAbbrev(tz);
+    document.querySelectorAll('[data-iso]').forEach(el => {
+        const iso = el.getAttribute('data-iso');
+        if (!iso || iso === 'None') return;
+        if (el.hasAttribute('data-relative')) {
+            el.textContent = relativeTime(iso);
+        } else {
+            // format "2026-04-23 15:10:06" style, then append zone abbrev subtly
+            const formatted = formatInTz(iso, tz).replace(',', '');
+            el.innerHTML = formatted + ' <span class="tz-label">' + abbrev + '</span>';
+        }
+    });
+}
+
+// Initialize TZ picker from localStorage
+const tzPicker = document.getElementById('tz-picker');
+tzPicker.value = localStorage.getItem(TZ_KEY) || 'auto';
+tzPicker.addEventListener('change', () => {
+    localStorage.setItem(TZ_KEY, tzPicker.value);
+    applyTimezone();
+});
+applyTimezone();
+
+// ============================================================================
+// Refresh controls (Pause / Resume / Manual)
+// Uses full page reload for simplicity; keeps scroll position and TZ choice
+// intact via localStorage + native browser scroll restoration.
+// ============================================================================
+const REFRESH_INTERVAL = 15;  // seconds
+const REFRESH_KEY = 'sniper.paused';
+let secondsLeft = REFRESH_INTERVAL;
+let paused = localStorage.getItem(REFRESH_KEY) === '1';
+
+const toggleBtn = document.getElementById('refresh-toggle');
+const refreshNowBtn = document.getElementById('refresh-now');
+const statusEl = document.getElementById('refresh-status');
+
+function renderToggle() {
+    toggleBtn.textContent = paused ? '▶ Resume' : '⏸ Pause';
+    toggleBtn.classList.toggle('active', !paused);
+}
+renderToggle();
+
+function tick() {
+    if (paused) {
+        statusEl.innerHTML = 'Paused';
+        return;
+    }
+    secondsLeft--;
+    if (secondsLeft <= 0) {
+        location.reload();
+        return;
+    }
+    const isoEl = statusEl.querySelector('[data-iso]');
+    const updated = isoEl ? relativeTime(isoEl.getAttribute('data-iso')) : 'just now';
+    statusEl.innerHTML = `Updated ${updated} · next in ${secondsLeft}s`;
+}
+setInterval(tick, 1000);
+
+toggleBtn.addEventListener('click', () => {
+    paused = !paused;
+    localStorage.setItem(REFRESH_KEY, paused ? '1' : '0');
+    renderToggle();
+    if (!paused) secondsLeft = REFRESH_INTERVAL;
+});
+refreshNowBtn.addEventListener('click', () => location.reload());
+
+// ============================================================================
+// Trade filters (client-side — no server roundtrip)
+// ============================================================================
+const filters = { asset: 'all', outcome: 'all', direction: 'all', search: '' };
+
+function applyFilters() {
+    const rows = document.querySelectorAll('#trades-table tbody tr');
+    let visible = 0;
+    const search = filters.search.toLowerCase();
+    rows.forEach(r => {
+        let show = true;
+        if (filters.asset !== 'all' && r.dataset.asset !== filters.asset) show = false;
+        if (filters.outcome !== 'all' && r.dataset.outcome !== filters.outcome) show = false;
+        if (filters.direction !== 'all' && r.dataset.direction !== filters.direction) show = false;
+        if (search && !(r.dataset.search || '').includes(search)) show = false;
+        r.hidden = !show;
+        if (show) visible++;
+    });
+    const counter = document.getElementById('trades-count-visible');
+    if (counter) counter.textContent = visible;
+}
+
+document.querySelectorAll('.filter-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const dim = btn.dataset.filter;
+        filters[dim] = btn.dataset.value;
+        document.querySelectorAll(`.filter-btn[data-filter="${dim}"]`)
+            .forEach(b => b.classList.toggle('active', b.dataset.value === filters[dim]));
+        applyFilters();
+    });
+});
+document.getElementById('filter-search').addEventListener('input', (e) => {
+    filters.search = e.target.value;
+    applyFilters();
+});
+
+// ============================================================================
+// Cumulative PnL chart
+// ============================================================================
+const ASSET_COLORS = { BTC: '#f7931a', ETH: '#58a6ff', SOL: '#9945ff' };
+let pnlChart = null;
+
+async function loadPnlChart() {
+    const info = document.getElementById('pnl-chart-info');
+    try {
+        const resp = await fetch('/api/pnl_series?days=7');
+        const body = await resp.json();
+        const series = body.series || {};
+        const assets = Object.keys(series);
+
+        const datasets = assets.map(a => ({
+            label: a,
+            data: (series[a] || []).map(p => ({ x: p.t, y: p.cumulative_pnl })),
+            borderColor: ASSET_COLORS[a] || '#c9d1d9',
+            backgroundColor: (ASSET_COLORS[a] || '#c9d1d9') + '22',
+            tension: 0.15,
+            pointRadius: 2,
+            pointHoverRadius: 5,
+            borderWidth: 2,
+            fill: false,
+        }));
+
+        const ctx = document.getElementById('pnl-chart').getContext('2d');
+        if (pnlChart) {
+            pnlChart.data.datasets = datasets;
+            pnlChart.update();
+        } else {
+            pnlChart = new Chart(ctx, {
+                type: 'line',
+                data: { datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'nearest', axis: 'x', intersect: false },
+                    plugins: {
+                        legend: { labels: { color: '#c9d1d9' } },
+                        tooltip: {
+                            callbacks: {
+                                label: (c) => `${c.dataset.label}: $${c.parsed.y.toFixed(2)}`
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: { tooltipFormat: 'PPp' },
+                            ticks: { color: '#8b949e', maxRotation: 0, autoSkip: true, maxTicksLimit: 8 },
+                            grid: { color: '#21262d' },
+                        },
+                        y: {
+                            ticks: {
+                                color: '#8b949e',
+                                callback: (v) => '$' + v.toFixed(0),
+                            },
+                            grid: { color: '#21262d' },
+                        }
+                    }
+                }
+            });
+        }
+
+        const totalPoints = assets.reduce((s, a) => s + (series[a] || []).length, 0);
+        info.textContent = totalPoints === 0
+            ? 'No trades in the last 7 days'
+            : `${totalPoints} trades · ${assets.join(' + ')}`;
+    } catch (err) {
+        info.textContent = 'Failed to load';
+        console.error(err);
+    }
+}
+loadPnlChart();
+</script>
 </body>
 </html>
