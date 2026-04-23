@@ -62,12 +62,16 @@ class OracleSniperStrategy(BaseStrategy):
         if cl_price <= 0:
             return None
 
-        # Get market prices (from market discovery, default to 0.50)
-        from crypto_sniper.market.discovery import MarketDiscovery
-        discovery = MarketDiscovery()
-        market = await discovery.get_market(window_ts)
-        up_price = market["up_price"] if market else 0.50
-        down_price = market["down_price"] if market else 0.50
+        # Use the asset-aware MarketDiscovery injected at initialize() time,
+        # NOT a fresh instance — that would default to the BTC slug prefix
+        # and pull the wrong market when this strategy runs on ETH/SOL.
+        if self._discovery is None:
+            return None
+        market = await self._discovery.get_market(window_ts)
+        # MarketDiscovery returns `up_price_mid` / `down_price_mid` (mid prices
+        # from Gamma, for reference only). Default to 0.50 if unavailable.
+        up_price = market.get("up_price_mid", 0.50) if market else 0.50
+        down_price = market.get("down_price_mid", 0.50) if market else 0.50
 
         # Get price velocity
         velocity = self._chainlink_feed.get_price_velocity(10)

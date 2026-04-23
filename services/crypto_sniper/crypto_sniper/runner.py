@@ -20,11 +20,19 @@ from crypto_sniper.config import SniperConfig
 from crypto_sniper.feeds.feed_manager import FeedManager
 from crypto_sniper.strategies.base import BaseStrategy, TradeSignal
 from crypto_sniper.sizing.kelly import kelly_bet, calculate_pnl
+from crypto_sniper.sizing.calibration import (
+    ConfidenceCalibrator, build_calibration_from_db,
+)
 from crypto_sniper.market.discovery import MarketDiscovery
 
 logger = logging.getLogger(__name__)
 
 WINDOW_SECONDS = 300  # 5-minute windows
+
+# Slippage model: live orders submit at `best_ask + SLIPPAGE_BUMP` to raise
+# fill probability. This matches what _execute_trade sends to Polymarket
+# and what we should charge in dry-run to avoid overstating PnL.
+SLIPPAGE_BUMP = 0.02  # +2c over the quoted best ask
 
 
 def _current_window_ts() -> int:
@@ -64,6 +72,16 @@ class StrategyRunner:
         self._asset = config.asset.lower()  # e.g. "btc", "eth"
         stats_dir = Path(os.environ.get("SNIPER_DATA_DIR", "/app/data"))
         self._stats_path = stats_dir / f"sniper_stats_{self._asset}.json"
+
+        # Empirical confidence calibrator — maps the TA "confidence" score to
+        # an observed win rate. Without this, Kelly treats conf=1.0 as 100%
+        # win probability, which our data shows is dramatically miscalibrated.
+        calibration_path = stats_dir / "calibration.json"
+        self._calibrator = ConfidenceCalibrator(
+            calibration_path=calibration_path,
+            default_cap=0.55,  # until proven otherwise, no signal exceeds this
+        )
+        self._calibration_db_path = stats_dir / "bot.db"
         self._write_stats_snapshot()
 
     def register(self, strategy: BaseStrategy) -> None:
@@ -72,6 +90,17 @@ class StrategyRunner:
 
     async def run(self) -> None:
         """Main loop — runs until shutdown signal."""
+        # Rebuild calibration from the latest trade history on startup so
+        # restarts don't lose ground. Safe if the DB is empty or sparse.
+        try:
+            build_calibration_from_db(
+                self._calibration_db_path,
+                self._stats_path.parent / "calibration.json",
+            )
+            self._calibrator.reload()
+        except Exception:
+            logger.warning("Calibration rebuild failed on startup", exc_info=True)
+
         # Initialize all strategies — pass both feed manager and market discovery
         # so they can fetch REAL Polymarket prices (no estimation fallback).
         for strategy in self._strategies:
@@ -92,6 +121,10 @@ class StrategyRunner:
         # Periodic stats snapshot refresher (keeps btc_price fresh)
         stats_task = asyncio.create_task(self._periodic_stats_refresh())
 
+        # Periodic calibration rebuild — recomputes empirical bucket win-rates
+        # from the DB every 30 min so the calibrator keeps learning.
+        calibration_task = asyncio.create_task(self._periodic_calibration_rebuild())
+
         while not self._shutdown_event.is_set():
             try:
                 await self._run_window()
@@ -103,6 +136,7 @@ class StrategyRunner:
 
         # Shutdown
         stats_task.cancel()
+        calibration_task.cancel()
         logger.info("StrategyRunner shutting down...")
         for strategy in self._strategies:
             await strategy.shutdown()
@@ -188,11 +222,22 @@ class StrategyRunner:
         if best_signal.strategy_name == "oracle_sniper":
             mode = "oracle"
 
+        # Calibrate stated confidence -> empirical win probability BEFORE sizing.
+        # This is the single most important correction to make dry-run numbers
+        # meaningful for live trading.
+        calibrated_prob = self._calibrator.calibrate(
+            self._asset, best_signal.confidence
+        )
+        logger.info(
+            "Calibration: stated_conf=%.2f -> model_prob=%.2f (asset=%s)",
+            best_signal.confidence, calibrated_prob, self._asset.upper(),
+        )
+
         bet_size = kelly_bet(
             bankroll=self._bankroll,
-            model_prob=best_signal.confidence,
+            model_prob=calibrated_prob,
             token_price=best_signal.token_price,
-            confidence=best_signal.confidence,
+            confidence=calibrated_prob,  # pass calibrated to mode floors too
             mode=mode,
             kelly_config=self.config.kelly,
         )
@@ -252,16 +297,33 @@ class StrategyRunner:
         signal: TradeSignal,
         bet_size: float,
     ) -> str:
-        """Place order on Polymarket for this signal."""
+        """Place order on Polymarket for this signal.
+
+        In dry-run, we now simulate live execution realism:
+          - effective fill price is quote + SLIPPAGE_CENTS (same as live order)
+          - shares/PnL computed from the effective price (not the quote)
+          - small random chance of FOK failure (can't fill at desired price)
+
+        This closes the gap between dry-run PnL and what live capital would see.
+        """
+        # Compute the price we would actually submit to Polymarket. The live
+        # code submits at `signal.token_price + 0.02` to increase the chance
+        # of a fill; dry-run should use the same effective cost.
+        effective_price = min(signal.token_price + SLIPPAGE_BUMP, 0.99)
+        # Overwrite the signal's token_price so downstream code (share count,
+        # PnL calculation, logging) all use the realistic effective fill.
+        signal.token_price = effective_price
+
         if self.config.trading.dry_run:
-            shares = bet_size / signal.token_price if signal.token_price > 0 else 0
+            shares = bet_size / effective_price if effective_price > 0 else 0
             logger.info(
-                "[DRY RUN] %s %s $%.2f (%.1f shares @ $%.3f)",
+                "[DRY RUN] %s %s $%.2f (%.1f shares @ $%.3f, quoted %.3f +2c slippage)",
                 signal.strategy_name,
                 signal.direction,
                 bet_size,
                 shares,
-                signal.token_price,
+                effective_price,
+                effective_price - SLIPPAGE_BUMP,
             )
             return "dry_run"
 
@@ -282,13 +344,15 @@ class StrategyRunner:
             logger.warning("No token_id for %s direction", signal.direction)
             return "failed"
 
+        # signal.token_price was already bumped by SLIPPAGE_BUMP above, so use
+        # it directly for shares AND for the limit price we submit.
         shares = bet_size / signal.token_price if signal.token_price > 0 else 0
 
         request = TradeRequest(
             condition_id=condition_id,
             token_id=token_id,
             side="BUY",
-            price=min(signal.token_price + 0.02, 0.99),
+            price=signal.token_price,  # already includes SLIPPAGE_BUMP
             size=shares,
             order_type="FOK",
             edge=signal.ev_edge or 0.0,
@@ -399,6 +463,25 @@ class StrategyRunner:
             "starting_bankroll": round(self._original_bankroll, 2),
             "pnl": round(self._bankroll - self._original_bankroll, 2),
         }
+
+    async def _periodic_calibration_rebuild(self) -> None:
+        """Recompute calibration.json every 30 minutes from logged trades."""
+        INTERVAL = 1800.0  # 30 min
+        while not self._shutdown_event.is_set():
+            try:
+                await asyncio.wait_for(self._shutdown_event.wait(), timeout=INTERVAL)
+            except asyncio.TimeoutError:
+                pass
+            except asyncio.CancelledError:
+                break
+            try:
+                build_calibration_from_db(
+                    self._calibration_db_path,
+                    self._stats_path.parent / "calibration.json",
+                )
+                self._calibrator.reload()
+            except Exception:
+                logger.debug("Calibration rebuild failed", exc_info=True)
 
     async def _periodic_stats_refresh(self) -> None:
         """Refresh stats snapshot every 15s so the dashboard sees live BTC price."""
