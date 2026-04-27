@@ -30,9 +30,64 @@ logger = logging.getLogger(__name__)
 WINDOW_SECONDS = 300  # 5-minute windows
 
 # Slippage model: live orders submit at `best_ask + SLIPPAGE_BUMP` to raise
-# fill probability. This matches what _execute_trade sends to Polymarket
-# and what we should charge in dry-run to avoid overstating PnL.
+# fill probability. This matches what _execute_trade sends to Polymarket.
+# In the new walk-the-book regime, this is the maximum price level we're
+# willing to walk to in order to fill the full size.
 SLIPPAGE_BUMP = 0.02  # +2c over the quoted best ask
+
+# Token-price floor — refuse trades when the underdog token costs less than
+# this. Three reasons: (1) deep-underdog regime is where book depth is
+# thinnest and slippage hurts most, (2) calibration data shows we lose
+# money in this bucket anyway, (3) the apparent "wins" at $0.03 entries
+# are exactly the trades whose dry-run PnL is most overstated.
+TOKEN_PRICE_FLOOR = 0.10
+
+# Minimum top-3-level liquidity in USD. If the cheapest 3 ask levels add
+# up to less than this much in dollars, we skip — the book is too thin to
+# trust the quoted price as something a real order could fill against.
+MIN_TOP3_DEPTH_USD = 5.0
+
+
+def compute_fok_fill(
+    asks: list[tuple[float, float]],
+    shares_wanted: float,
+    limit_price: float,
+) -> tuple[float | None, bool]:
+    """Simulate a Polymarket FOK BUY by walking the ask book.
+
+    Polymarket FOK orders are all-or-nothing: the entire size must fill at
+    or below the limit price, or the order is killed and nothing happens.
+
+    Args:
+        asks: List of (price, size) tuples, sorted ascending by price.
+        shares_wanted: Total shares we need.
+        limit_price: Highest price we're willing to walk to.
+
+    Returns:
+        (avg_fill_price, True)  if the full size fills at <= limit
+        (None,            False) if the FOK would kill (insufficient depth
+                                  at acceptable prices)
+    """
+    if not asks or shares_wanted <= 0:
+        return None, False
+    total_cost = 0.0
+    total_shares = 0.0
+    for price, size in asks:
+        if price > limit_price:
+            break
+        take = min(size, shares_wanted - total_shares)
+        if take <= 0:
+            break
+        total_cost += take * price
+        total_shares += take
+        if total_shares >= shares_wanted - 1e-9:
+            return total_cost / total_shares, True
+    return None, False
+
+
+def top_n_depth_usd(asks: list[tuple[float, float]], n: int = 3) -> float:
+    """Sum (price × size) of the top-N ask levels — total fillable USD."""
+    return sum(p * s for p, s in asks[:n])
 
 
 def _current_window_ts() -> int:
@@ -252,6 +307,67 @@ class StrategyRunner:
             self._traded_windows.add(window_ts)
             return
 
+        # ── Execution-realism gates ───────────────────────────────────────
+        # 1. Token-price floor: refuse pennies-on-the-dollar underdog bets.
+        if best_signal.token_price < TOKEN_PRICE_FLOOR:
+            logger.info(
+                "Token price floor: %s %s @ $%.3f < $%.3f — skipping",
+                best_signal.strategy_name, best_signal.direction,
+                best_signal.token_price, TOKEN_PRICE_FLOOR,
+            )
+            self._traded_windows.add(window_ts)
+            return
+
+        # 2. Walk the book: confirm the FOK can actually fill at our limit.
+        # Refresh the book here (not the cached strategy quote) because the
+        # ask side moves second-to-second.
+        asks = await self.discovery.get_live_token_book(
+            window_ts, best_signal.direction
+        )
+        if not asks:
+            logger.info(
+                "Book empty for %s %s — skipping",
+                best_signal.strategy_name, best_signal.direction,
+            )
+            self._traded_windows.add(window_ts)
+            return
+
+        # 3. Depth gate: top-3 levels must offer at least MIN_TOP3_DEPTH_USD.
+        depth_usd = top_n_depth_usd(asks, n=3)
+        if depth_usd < MIN_TOP3_DEPTH_USD:
+            logger.info(
+                "Insufficient depth: top-3 = $%.2f < $%.2f — skipping",
+                depth_usd, MIN_TOP3_DEPTH_USD,
+            )
+            self._traded_windows.add(window_ts)
+            return
+
+        # 4. FOK simulation: shares_wanted at limit = quote + SLIPPAGE_BUMP.
+        # If the book can't support the full fill at that limit, the order
+        # would be killed in live trading — skip in dry-run too.
+        shares_wanted = bet_size / best_signal.token_price
+        limit_price = min(best_signal.token_price + SLIPPAGE_BUMP, 0.99)
+        avg_fill, filled = compute_fok_fill(asks, shares_wanted, limit_price)
+        if not filled:
+            logger.info(
+                "FOK would kill: want %.1f shares at limit $%.3f "
+                "(top ask $%.3f, depth $%.2f) — skipping",
+                shares_wanted, limit_price, asks[0][0], depth_usd,
+            )
+            self._traded_windows.add(window_ts)
+            return
+
+        # Replace the quoted price with the realistic walked fill price.
+        # This is what shares + PnL accounting will use throughout.
+        logger.info(
+            "FOK fill OK: quote $%.3f → walked $%.3f (limit $%.3f, "
+            "shares %.1f, depth $%.2f)",
+            best_signal.token_price, avg_fill, limit_price,
+            shares_wanted, depth_usd,
+        )
+        best_signal.token_price = avg_fill
+        # ──────────────────────────────────────────────────────────────────
+
         # Execute trade
         order_status = await self._execute_trade(
             window_ts, best_signal, bet_size
@@ -299,31 +415,21 @@ class StrategyRunner:
     ) -> str:
         """Place order on Polymarket for this signal.
 
-        In dry-run, we now simulate live execution realism:
-          - effective fill price is quote + SLIPPAGE_CENTS (same as live order)
-          - shares/PnL computed from the effective price (not the quote)
-          - small random chance of FOK failure (can't fill at desired price)
-
-        This closes the gap between dry-run PnL and what live capital would see.
+        At entry, signal.token_price is the walked-book average fill price
+        from compute_fok_fill() — already reflects realistic slippage.
+        Shares + PnL are computed from this effective price, both in
+        dry-run and live.
         """
-        # Compute the price we would actually submit to Polymarket. The live
-        # code submits at `signal.token_price + 0.02` to increase the chance
-        # of a fill; dry-run should use the same effective cost.
-        effective_price = min(signal.token_price + SLIPPAGE_BUMP, 0.99)
-        # Overwrite the signal's token_price so downstream code (share count,
-        # PnL calculation, logging) all use the realistic effective fill.
-        signal.token_price = effective_price
-
+        effective_price = signal.token_price
         if self.config.trading.dry_run:
             shares = bet_size / effective_price if effective_price > 0 else 0
             logger.info(
-                "[DRY RUN] %s %s $%.2f (%.1f shares @ $%.3f, quoted %.3f +2c slippage)",
+                "[DRY RUN] %s %s $%.2f (%.1f shares @ $%.3f walked)",
                 signal.strategy_name,
                 signal.direction,
                 bet_size,
                 shares,
                 effective_price,
-                effective_price - SLIPPAGE_BUMP,
             )
             return "dry_run"
 
@@ -344,15 +450,18 @@ class StrategyRunner:
             logger.warning("No token_id for %s direction", signal.direction)
             return "failed"
 
-        # signal.token_price was already bumped by SLIPPAGE_BUMP above, so use
-        # it directly for shares AND for the limit price we submit.
+        # signal.token_price is the walked-book avg fill from
+        # compute_fok_fill(); we already verified the FOK can fully fill
+        # at limit = quote + SLIPPAGE_BUMP. Submit at that limit so the
+        # exchange accepts the same range of price levels we walked.
         shares = bet_size / signal.token_price if signal.token_price > 0 else 0
+        limit_price = min(signal.token_price + SLIPPAGE_BUMP, 0.99)
 
         request = TradeRequest(
             condition_id=condition_id,
             token_id=token_id,
             side="BUY",
-            price=signal.token_price,  # already includes SLIPPAGE_BUMP
+            price=limit_price,
             size=shares,
             order_type="FOK",
             edge=signal.ev_edge or 0.0,

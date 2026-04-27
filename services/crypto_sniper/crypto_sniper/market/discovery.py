@@ -136,6 +136,49 @@ class MarketDiscovery:
         self._cache[window_ts] = result
         return result
 
+    async def get_ask_book(
+        self, token_id: str
+    ) -> Optional[list[tuple[float, float]]]:
+        """Return the full ask side of the order book as [(price, size), ...]
+        sorted ascending by price.
+
+        Returns None if the request fails or the book has no asks. Used by
+        the runner to simulate realistic FOK fills (walk-the-book), which is
+        critical because top-of-book quotes can be backed by tiny size that
+        doesn't represent the price we'd actually pay for a meaningful order.
+        """
+        if not token_id:
+            return None
+        await self._ensure_session()
+        try:
+            url = f"{CLOB_API}/book"
+            async with self._session.get(
+                url,
+                params={"token_id": token_id},
+                timeout=aiohttp.ClientTimeout(total=3),
+            ) as resp:
+                if resp.status != 200:
+                    return None
+                book = await resp.json()
+        except Exception:
+            logger.debug("Failed to fetch book for %s", token_id[:10], exc_info=True)
+            return None
+
+        asks = book.get("asks") or []
+        if not asks:
+            return None
+        try:
+            levels = [(float(a["price"]), float(a["size"])) for a in asks]
+        except (KeyError, ValueError, TypeError):
+            return None
+
+        # Filter degenerate levels and sort ascending (cheapest first)
+        levels = [(p, s) for p, s in levels if 0 < p < 1.0 and s > 0]
+        if not levels:
+            return None
+        levels.sort(key=lambda x: x[0])
+        return levels
+
     async def get_best_ask(
         self, token_id: str, min_size: float = 1.0
     ) -> Optional[float]:
@@ -196,6 +239,19 @@ class MarketDiscovery:
                 continue
             return price
         return None
+
+    async def get_live_token_book(
+        self, window_ts: int, direction: str
+    ) -> Optional[list[tuple[float, float]]]:
+        """Convenience: fetch the full ask book for the UP/DOWN token of a window."""
+        market = await self.get_market(window_ts)
+        if market is None:
+            return None
+        token_key = "up_token" if direction.upper() == "UP" else "down_token"
+        token_id = market.get(token_key)
+        if not token_id:
+            return None
+        return await self.get_ask_book(token_id)
 
     async def get_live_token_price(
         self, window_ts: int, direction: str
