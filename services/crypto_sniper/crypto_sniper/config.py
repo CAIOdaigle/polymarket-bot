@@ -52,6 +52,11 @@ class KellyConfig(BaseSettings):
     """Token-price-aware Kelly sizing."""
     fraction: float = 0.25  # quarter Kelly
     min_bet_usd: float = 4.75  # Polymarket minimum
+    # ABSOLUTE max bet in USD, regardless of bankroll size. This stops
+    # exponential compounding from inflating bets to thousands of dollars
+    # while we still don't know if quoted CLOB depth is real-fillable.
+    # Default $25; adjust upward only after live-fill probes pass.
+    max_bet_usd: float = 25.0
     # Mode-specific max bet as fraction of bankroll
     max_bet_fraction_safe: float = 0.01
     max_bet_fraction_aggressive: float = 0.02

@@ -29,6 +29,11 @@ oracle_sniper:
 kelly:
   fraction: 0.25
   min_bet_usd: 1.00
+  # Absolute USD cap on any single bet, regardless of bankroll growth.
+  # Prevents Kelly from compounding bets into thousands while we still
+  # haven't verified that the deep CLOB asks at $0.30/$0.50/$0.70 are
+  # actually fillable in live trading.
+  max_bet_usd: 25.0
 
 feeds:
   # binance_symbol + binance_ws_url are auto-derived from the top-level

@@ -35,6 +35,7 @@ def kelly_bet(
     # Config defaults
     kelly_fraction = 0.25
     min_bet = 4.75
+    max_bet_usd = 25.0  # absolute cap, see KellyConfig.max_bet_usd
 
     # Mode-specific caps
     max_bet_fractions = {
@@ -59,6 +60,7 @@ def kelly_bet(
     if kelly_config is not None:
         kelly_fraction = kelly_config.fraction
         min_bet = kelly_config.min_bet_usd
+        max_bet_usd = getattr(kelly_config, "max_bet_usd", max_bet_usd)
         max_bet_fractions = {
             "safe": kelly_config.max_bet_fraction_safe,
             "aggressive": kelly_config.max_bet_fraction_aggressive,
@@ -102,7 +104,12 @@ def kelly_bet(
     fraction = min(f_actual, max_fraction)
     bet = bankroll * fraction
 
-    # Enforce minimums and maximums
+    # Enforce absolute USD cap BEFORE checking minimum, so the cap doesn't
+    # accidentally push a sized bet below min_bet (the floor is for tiny
+    # signals not worth trading, not a way to undo the cap).
+    bet = min(bet, max_bet_usd)
+
+    # Enforce minimums and bankroll bound
     if bet < min_bet:
         return 0.0
     bet = min(bet, bankroll)
