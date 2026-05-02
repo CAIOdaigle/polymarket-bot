@@ -231,6 +231,67 @@
     </div>
     {% endif %}
 
+    {% if anomaly.available and anomaly.fired %}
+    <div class="section" style="border-color: {% if anomaly.halt_flag_present %}#f8514999{% elif anomaly.severity == 'halt' %}#f85149{% else %}#d29922{% endif %};">
+        <h2>
+            {% if anomaly.halt_flag_present %}🛑 TRADING HALTED — anomaly detected
+            {% elif anomaly.severity == 'halt' %}🛑 Anomaly detected (halt severity)
+            {% else %}⚠ Anomaly detected
+            {% endif %}
+            <span class="sub">Last scan <span data-iso="{{ anomaly.ts_iso }}" data-relative="1">—</span> · window {{ anomaly.window_size }} trades</span>
+        </h2>
+
+        {% if anomaly.halt_flag_present %}
+        <div class="banner warn" style="background: #f8514922; border-color: #f8514999;">
+            <strong>Trading is paused.</strong> The runner will not place trades
+            until <code>halt.flag</code> is removed from the data dir
+            (<code>rm /app/data/halt.flag</code>) or the underlying issue is fixed.
+        </div>
+        {% endif %}
+
+        <h3 style="font-size: 13px; margin-bottom: 8px; color: #c9d1d9;">Firing detectors</h3>
+        <table style="margin-bottom: 16px;">
+            <thead>
+                <tr><th>Detector</th><th>Severity</th><th>Finding</th></tr>
+            </thead>
+            <tbody>
+            {% for d in anomaly.fired %}
+                <tr>
+                    <td class="mono">{{ d.name }}</td>
+                    <td>
+                        {% if d.severity == 'halt' %}<span class="badge loss">HALT</span>
+                        {% elif d.severity == 'warn' %}<span class="badge unprofitable">WARN</span>
+                        {% else %}<span class="badge unknown">INFO</span>{% endif %}
+                    </td>
+                    <td>{{ d.message }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+
+        <h3 style="font-size: 13px; margin-bottom: 8px; color: #c9d1d9;">Top hypotheses & recommended fixes</h3>
+        {% for h in anomaly.hypotheses %}
+            <div style="background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 12px; margin-bottom: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <strong>{{ loop.index }}. {{ h.name.replace('_', ' ').title() }}</strong>
+                    <span class="mono" style="background: {% if h.score >= 80 %}#3fb95033{% elif h.score >= 50 %}#d2992233{% else %}#484f5833{% endif %}; padding: 4px 10px; border-radius: 12px; font-weight: 600;">
+                        {{ h.score }}/100
+                    </span>
+                </div>
+                <div style="color: #8b949e; font-size: 12px; margin-bottom: 8px;">{{ h.description }}</div>
+                <div style="font-size: 12px;">
+                    <strong style="color: #58a6ff;">Recommended fix</strong> (confidence {{ h.fix_confidence }}/100): {{ h.recommended_fix }}
+                </div>
+                {% if h.matching %}
+                <div style="font-size: 11px; color: #6e7681; margin-top: 6px;">
+                    Supporting evidence: {{ h.matching|join(', ') }}{% if h.missing %} · Missing expected: {{ h.missing|join(', ') }}{% endif %}
+                </div>
+                {% endif %}
+            </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
     <div class="cards">
         <div class="card">
             <div class="label">Total Bankroll ({{ stats.asset_count }} assets)</div>

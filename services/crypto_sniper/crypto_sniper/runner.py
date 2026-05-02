@@ -24,6 +24,7 @@ from crypto_sniper.sizing.calibration import (
     ConfidenceCalibrator, build_calibration_from_db,
 )
 from crypto_sniper.market.discovery import MarketDiscovery
+from crypto_sniper.anomaly.monitor import run_anomaly_check, is_halted
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +181,10 @@ class StrategyRunner:
         # from the DB every 30 min so the calibrator keeps learning.
         calibration_task = asyncio.create_task(self._periodic_calibration_rebuild())
 
+        # Periodic anomaly monitor — scans last N trades, fires detectors,
+        # ranks hypotheses, sets halt flag on halt-severity findings.
+        anomaly_task = asyncio.create_task(self._periodic_anomaly_check())
+
         while not self._shutdown_event.is_set():
             try:
                 await self._run_window()
@@ -192,6 +197,7 @@ class StrategyRunner:
         # Shutdown
         stats_task.cancel()
         calibration_task.cancel()
+        anomaly_task.cancel()
         logger.info("StrategyRunner shutting down...")
         for strategy in self._strategies:
             await strategy.shutdown()
@@ -207,6 +213,16 @@ class StrategyRunner:
         """Wait for the next window entry point, evaluate strategies, maybe trade."""
         window_ts = _current_window_ts()
         close_time = window_ts + WINDOW_SECONDS
+
+        # KILL SWITCH: a halt flag in the data dir disables all trading
+        # until manually cleared. Set automatically when an anomaly detector
+        # fires at halt severity.
+        if is_halted(self._stats_path.parent):
+            if window_ts not in self._traded_windows:
+                logger.warning("HALT FLAG present at %s — skipping window %d",
+                               self._stats_path.parent / "halt.flag", window_ts)
+            self._traded_windows.add(window_ts)
+            return
 
         # Skip if we already traded this window
         if window_ts in self._traded_windows:
@@ -572,6 +588,25 @@ class StrategyRunner:
             "starting_bankroll": round(self._original_bankroll, 2),
             "pnl": round(self._bankroll - self._original_bankroll, 2),
         }
+
+    async def _periodic_anomaly_check(self) -> None:
+        """Run anomaly detectors every 10 minutes. Sets the halt flag on
+        any halt-severity detection. The runner respects the flag before
+        evaluating each window."""
+        INTERVAL = 600.0  # 10 minutes
+        # Run once shortly after startup so the dashboard has fresh data
+        await asyncio.sleep(30)
+        while not self._shutdown_event.is_set():
+            try:
+                run_anomaly_check(self._stats_path.parent, window=100)
+            except Exception:
+                logger.debug("anomaly check failed", exc_info=True)
+            try:
+                await asyncio.wait_for(self._shutdown_event.wait(), timeout=INTERVAL)
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                break
 
     async def _periodic_calibration_rebuild(self) -> None:
         """Recompute calibration.json every 30 minutes from logged trades."""

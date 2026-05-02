@@ -14,6 +14,8 @@ from flask import Flask, jsonify, render_template, request
 DATA_DIR = Path(os.environ.get("SNIPER_DATA_DIR", "/app/data"))
 DB_PATH = DATA_DIR / "bot.db"
 CALIBRATION_PATH = DATA_DIR / "calibration.json"
+ANOMALY_LATEST_PATH = DATA_DIR / "anomaly_latest.json"
+HALT_FLAG_PATH = DATA_DIR / "halt.flag"
 
 # Assets supported by the multi-asset dashboard. Each asset writes its own
 # sniper_stats_{asset}.json snapshot from the runner process.
@@ -371,6 +373,7 @@ def dashboard():
     trade_count = _get_trade_count()
     legacy_count = _get_legacy_count()
     calibration = _get_calibration()
+    anomaly = _get_anomaly_report()
     now = datetime.now(timezone.utc)
 
     return render_template(
@@ -381,6 +384,7 @@ def dashboard():
         trade_count=trade_count,
         legacy_count=legacy_count,
         calibration=calibration,
+        anomaly=anomaly,
         is_live=not totals.get("dry_run", True),
         now=now.strftime("%Y-%m-%d %H:%M:%S UTC"),
         now_iso=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -404,6 +408,29 @@ def api_stats():
 @app.route("/api/calibration")
 def api_calibration():
     return jsonify(_get_calibration())
+
+
+def _get_anomaly_report() -> dict:
+    """Read the latest anomaly report (written by anomaly.monitor)."""
+    if not ANOMALY_LATEST_PATH.exists():
+        return {"available": False}
+    try:
+        data = json.loads(ANOMALY_LATEST_PATH.read_text())
+    except Exception:
+        return {"available": False}
+    data["available"] = True
+    data["halt_flag_present"] = HALT_FLAG_PATH.exists()
+    if data["halt_flag_present"]:
+        try:
+            data["halt_flag"] = json.loads(HALT_FLAG_PATH.read_text())
+        except Exception:
+            data["halt_flag"] = {"raw": HALT_FLAG_PATH.read_text()}
+    return data
+
+
+@app.route("/api/anomaly")
+def api_anomaly():
+    return jsonify(_get_anomaly_report())
 
 
 @app.route("/api/pnl_series")
