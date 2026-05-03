@@ -31,9 +31,18 @@ logger = logging.getLogger(__name__)
 ANOMALY_LOG = "anomaly_log.jsonl"
 ANOMALY_LATEST = "anomaly_latest.json"
 HALT_FLAG = "halt.flag"
+AUDIT_ANCHOR = "audit_anchor.json"
 
 
-def _load_recent_trades(db_path: Path, limit: int = 100) -> list[dict]:
+def _load_recent_trades(
+    db_path: Path,
+    limit: int = 100,
+    since_ts: float = 0,
+) -> list[dict]:
+    """Load recent trades from the DB, optionally filtered to those placed
+    at-or-after `since_ts`. The since_ts mechanism is used to reset the
+    audit window after the user clears a halt flag — otherwise the same
+    bad-regime trades keep re-tripping the detectors."""
     if not db_path.exists():
         return []
     conn = sqlite3.connect(str(db_path))
@@ -47,8 +56,9 @@ def _load_recent_trades(db_path: Path, limit: int = 100) -> list[dict]:
                FROM orders
                WHERE order_id LIKE 'sniper-%'
                  AND estimated_price IS NOT NULL
+                 AND placed_at >= ?
                ORDER BY placed_at DESC LIMIT ?""",
-            (limit,),
+            (since_ts, limit),
         ).fetchall()
     finally:
         conn.close()
@@ -58,6 +68,54 @@ def _load_recent_trades(db_path: Path, limit: int = 100) -> list[dict]:
         d["asset"] = _asset_of(d["order_id"])
         out.append(d)
     return out
+
+
+def _maybe_reset_audit_anchor(data_dir: Path) -> float:
+    """If the previous run halted but the user has since cleared halt.flag,
+    re-anchor the audit window to NOW. Returns the current anchor timestamp
+    (0 if none).
+
+    This is what makes "rm halt.flag" a meaningful gesture: instead of the
+    detectors immediately re-tripping on the same historical bad data,
+    they only consider trades placed after the user acknowledged the issue.
+    """
+    latest_path = data_dir / ANOMALY_LATEST
+    halt_path = data_dir / HALT_FLAG
+    anchor_path = data_dir / AUDIT_ANCHOR
+
+    # Detect "user just cleared a halt": previous report was halt=True
+    # but halt.flag is now absent.
+    if latest_path.exists() and not halt_path.exists():
+        try:
+            prev = json.loads(latest_path.read_text())
+        except Exception:
+            prev = {}
+        if prev.get("halt"):
+            now_ts = time.time()
+            anchor = {
+                "anchor_ts": now_ts,
+                "anchor_iso": datetime.fromtimestamp(
+                    now_ts, tz=timezone.utc
+                ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "reason": "user_cleared_halt",
+                "previous_halt_at": prev.get("ts_iso"),
+            }
+            try:
+                anchor_path.write_text(json.dumps(anchor, indent=2))
+                logger.info(
+                    "Halt flag cleared by user — audit window re-anchored to %s. "
+                    "Detectors will only consider trades after this point.",
+                    anchor["anchor_iso"],
+                )
+            except Exception:
+                logger.exception("failed to write audit_anchor.json")
+
+    if anchor_path.exists():
+        try:
+            return float(json.loads(anchor_path.read_text()).get("anchor_ts", 0))
+        except Exception:
+            return 0.0
+    return 0.0
 
 
 def run_anomaly_check(
@@ -71,7 +129,10 @@ def run_anomaly_check(
     On halt-severity firing, writes the halt flag (runner checks before trades).
     """
     db_path = db_path or (data_dir / "bot.db")
-    trades = _load_recent_trades(db_path, limit=window)
+    # If the user cleared a previous halt, re-anchor to NOW so the same
+    # historical bad data doesn't immediately re-trip the detectors.
+    anchor_ts = _maybe_reset_audit_anchor(data_dir)
+    trades = _load_recent_trades(db_path, limit=window, since_ts=anchor_ts)
 
     detector_results: list[DetectorResult] = []
     for fn in ALL_DETECTORS:
@@ -92,6 +153,10 @@ def run_anomaly_check(
         "ts": time.time(),
         "ts_iso": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "window_size": len(trades),
+        "audit_anchor_ts": anchor_ts,
+        "audit_anchor_iso": datetime.fromtimestamp(
+            anchor_ts, tz=timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%SZ") if anchor_ts > 0 else None,
         "fired": [asdict(r) for r in fired],
         "all_results": [asdict(r) for r in detector_results],
         "hypotheses": [asdict(h) for h in hypotheses],
