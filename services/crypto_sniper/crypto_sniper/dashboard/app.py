@@ -42,9 +42,16 @@ app = Flask(__name__, template_folder=str(Path(__file__).parent / "templates"))
 
 
 def _get_db():
+    """Open bot.db in URI read-only mode.
+
+    The dashboard runs in its own container (separate from the runners that
+    own the DB). Opening with ?mode=ro enforces at the SQLite layer that we
+    can't accidentally write — even though the volume is mounted rw to let
+    SQLite manage its WAL/SHM files.
+    """
     if not DB_PATH.exists():
         return None
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     return conn
 

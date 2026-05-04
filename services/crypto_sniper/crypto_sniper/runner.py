@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import signal
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -125,6 +126,10 @@ class StrategyRunner:
         self._win_count = 0
         self._loss_count = 0
         self._traded_windows: set[int] = set()
+        # Watchdog: monotonic timestamp of the last window evaluation. If
+        # this falls behind by more than the grace period the watchdog
+        # force-exits the process; container restart policy revives us.
+        self._last_eval_ts = time.time()
         self._asset = config.asset.lower()  # e.g. "btc", "eth"
         stats_dir = Path(os.environ.get("SNIPER_DATA_DIR", "/app/data"))
         self._stats_path = stats_dir / f"sniper_stats_{self._asset}.json"
@@ -185,6 +190,11 @@ class StrategyRunner:
         # ranks hypotheses, sets halt flag on halt-severity findings.
         anomaly_task = asyncio.create_task(self._periodic_anomaly_check())
 
+        # Watchdog — force-exits the process if the runner loop stalls,
+        # so the container restart policy can revive us instead of leaving
+        # a wedged process around.
+        watchdog_task = asyncio.create_task(self._watchdog())
+
         while not self._shutdown_event.is_set():
             try:
                 await self._run_window()
@@ -198,6 +208,7 @@ class StrategyRunner:
         stats_task.cancel()
         calibration_task.cancel()
         anomaly_task.cancel()
+        watchdog_task.cancel()
         logger.info("StrategyRunner shutting down...")
         for strategy in self._strategies:
             await strategy.shutdown()
@@ -211,6 +222,8 @@ class StrategyRunner:
 
     async def _run_window(self) -> None:
         """Wait for the next window entry point, evaluate strategies, maybe trade."""
+        # Watchdog heartbeat — proves the runner loop is alive
+        self._last_eval_ts = time.time()
         window_ts = _current_window_ts()
         close_time = window_ts + WINDOW_SECONDS
 
@@ -588,6 +601,37 @@ class StrategyRunner:
             "starting_bankroll": round(self._original_bankroll, 2),
             "pnl": round(self._bankroll - self._original_bankroll, 2),
         }
+
+    async def _watchdog(self) -> None:
+        """Hard-exit the process if the main loop stalls for more than the
+        grace period. Two 5-min windows = 600s of grace.
+
+        Why os._exit instead of clean shutdown: if asyncio is wedged (which
+        is how we'd get into this state), the cooperative shutdown path may
+        also be wedged. A hard exit is the only reliable way to unstick us;
+        the container's restart: unless-stopped policy then revives us with
+        a clean state."""
+        GRACE_SECONDS = 600
+        CHECK_INTERVAL = 60
+        # Give the runner a couple of windows to start up before we begin checking.
+        await asyncio.sleep(GRACE_SECONDS)
+        while not self._shutdown_event.is_set():
+            try:
+                await asyncio.wait_for(
+                    self._shutdown_event.wait(), timeout=CHECK_INTERVAL
+                )
+            except asyncio.TimeoutError:
+                pass
+            except asyncio.CancelledError:
+                break
+            idle = time.time() - self._last_eval_ts
+            if idle > GRACE_SECONDS:
+                logger.error(
+                    "WATCHDOG: no window eval for %.0fs (grace %ds) — "
+                    "force-exiting for restart", idle, GRACE_SECONDS,
+                )
+                # Hard exit so the container restart policy takes over.
+                os._exit(2)
 
     async def _periodic_anomaly_check(self) -> None:
         """Run anomaly detectors every 10 minutes. Sets the halt flag on

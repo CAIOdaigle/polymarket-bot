@@ -13,7 +13,19 @@ services:
       - shared-data:/app/data
       - bot-logs:/app/logs
 
-  # BTC sniper — also hosts the shared multi-asset dashboard on port 5051.
+  # ────────────────────────────────────────────────────────────────────
+  # Crypto sniper runners — one per asset. They write trades + stats to
+  # the shared volume; the separate dashboard service reads from there.
+  # The runners no longer host the dashboard, so a runner OOM/crash
+  # can't take the dashboard down with it.
+  #
+  # Healthcheck: each runner refreshes sniper_stats_<asset>.json every
+  # ~15s. We mark unhealthy if the file hasn't been touched in 3 min,
+  # which is enough rope for slow startup and 5-min window cycles.
+  # The runner ALSO has an internal watchdog that hard-exits after 10
+  # minutes of no window evaluations, triggering restart: unless-stopped.
+  # ────────────────────────────────────────────────────────────────────
+
   crypto-sniper-btc:
     build:
       context: .
@@ -23,18 +35,22 @@ services:
     env_file: .env
     environment:
       - SNIPER_ASSET=BTC
-      - RUN_DASHBOARD=1
-    ports:
-      - "0.0.0.0:5051:5051"
+      - RUN_DASHBOARD=0
     volumes:
       - shared-data:/app/data
       - sniper-logs:/app/logs
+    healthcheck:
+      test: ["CMD-SHELL", "test $(($(date +%s) - $(stat -c %Y /app/data/sniper_stats_btc.json 2>/dev/null || echo 0))) -lt 180"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
 
-  # ETH sniper — no dashboard; just writes stats to the shared volume.
   crypto-sniper-eth:
     image: polymarket-bot-crypto-sniper
     depends_on:
-      - crypto-sniper-btc
+      crypto-sniper-btc:
+        condition: service_started
     restart: unless-stopped
     env_file: .env
     environment:
@@ -43,6 +59,44 @@ services:
     volumes:
       - shared-data:/app/data
       - sniper-logs:/app/logs
+    healthcheck:
+      test: ["CMD-SHELL", "test $(($(date +%s) - $(stat -c %Y /app/data/sniper_stats_eth.json 2>/dev/null || echo 0))) -lt 180"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  # ────────────────────────────────────────────────────────────────────
+  # Dashboard — its own container so a runner crash doesn't affect it.
+  # Reuses the same image (it has the dashboard package installed),
+  # mounts the data dir read-only, and just runs the Flask app.
+  # ────────────────────────────────────────────────────────────────────
+  crypto-sniper-dashboard:
+    image: polymarket-bot-crypto-sniper
+    depends_on:
+      crypto-sniper-btc:
+        condition: service_started
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - SNIPER_DATA_DIR=/app/data
+      - DASHBOARD_PORT=5051
+    # Override the image's ENTRYPOINT (which wraps in start.sh + main.py)
+    # so this container only runs the Flask dashboard.
+    entrypoint: ["python", "-m", "crypto_sniper.dashboard.app"]
+    ports:
+      - "0.0.0.0:5051:5051"
+    volumes:
+      # Not :ro — SQLite WAL needs to write the -shm/-wal index files even
+      # for read queries. The dashboard code uses URI mode=ro to enforce
+      # read-only at the application layer instead.
+      - shared-data:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request,sys; sys.exit(0 if urllib.request.urlopen(\"http://localhost:5051/api/stats\", timeout=3).status==200 else 1)'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
 volumes:
   shared-data:
